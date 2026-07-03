@@ -49,6 +49,11 @@ pub fn parse_document(markdown: &str) -> Result<SoupDocument, SoupifyError> {
             break;
         }
 
+        if header.starts_with("#SOUP_AUTO_UNSOUPIFY") {
+            index += 1;
+            continue;
+        }
+
         if header.starts_with("#SOUP_META ") {
             let (meta_block, consumed) = parse_meta_block(header, index + 1, &lines)?;
             index += 1 + consumed;

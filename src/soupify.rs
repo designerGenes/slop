@@ -11,7 +11,6 @@ use crate::pathing::{
 };
 use crate::secrets;
 use crate::selection;
-use crate::sharktopus;
 use crate::soup_format::{analyze_contents, serialize_document};
 
 pub fn run_soupify(args: &CliArgs, config: &Config) -> Result<PathBuf, SoupifyError> {
@@ -114,19 +113,6 @@ pub fn run_soupify(args: &CliArgs, config: &Config) -> Result<PathBuf, SoupifyEr
     meta_blocks.extend(selection_meta);
 
     let markdown = serialize_document(&meta_blocks, &source_files)?;
-
-    if config.connect_with_downloads_watcher {
-        match sharktopus::ensure_rules(config) {
-            Ok(messages) => {
-                for msg in &messages {
-                    eprintln!("{msg}");
-                }
-            }
-            Err(error) => {
-                eprintln!("warning: failed to configure Sharktopus: {error}");
-            }
-        }
-    }
 
     fs::create_dir_all(&output_dir).map_err(|error| SoupifyError::DirectoryCreationFailure {
         path: output_dir.clone(),

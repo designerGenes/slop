@@ -21,6 +21,52 @@ struct LangEntry {
     query_src: &'static str,
 }
 
+// tree-sitter-gdscript 6.x ships its grammar via the new tree-sitter-language
+// crate and does not export a TAGS_QUERY, so we link the C symbol directly
+// (it returns a `TSLanguage*`, which is ABI-compatible with tree-sitter 0.22's
+// `#[repr(transparent)] Language`) and supply our own SCM query.
+unsafe extern "C" {
+    unsafe fn tree_sitter_gdscript() -> Language;
+}
+
+// GDScript tags query. Capture convention matches the other grammars:
+//   `@name`              → the identifier node whose text becomes the tag name
+//   `@definition.<kind>` → marks the match as a definition
+//   `@reference.<kind>`  → marks the match as a reference
+const GDSCRIPT_TAGS_QUERY: &str = r#"
+(class_definition
+  name: (name) @name) @definition.class
+
+(enum_definition
+  name: (name) @name) @definition.enum
+
+(function_definition
+  name: (name) @name) @definition.function
+
+(constructor_definition) @definition.function
+
+(signal_statement
+  name: (name) @name) @definition.macro
+
+(variable_statement
+  name: (name) @name) @definition.constant
+
+(export_variable_statement
+  name: (name) @name) @definition.constant
+
+(onready_variable_statement
+  name: (name) @name) @definition.constant
+
+(class_name_statement
+  (name) @name) @definition.class
+
+(call
+  (identifier) @name) @reference.call
+
+(attribute_call
+  (identifier) @name) @reference.call
+"#;
+
 fn lang_entry(path: &Path) -> Option<LangEntry> {
     let ext = path.extension()?.to_str()?.to_lowercase();
     let entry = match ext.as_str() {
@@ -63,6 +109,14 @@ fn lang_entry(path: &Path) -> Option<LangEntry> {
         "rb" => LangEntry {
             language: tree_sitter_ruby::language(),
             query_src: tree_sitter_ruby::TAGS_QUERY,
+        },
+        "gd" => LangEntry {
+            language: unsafe { tree_sitter_gdscript() },
+            query_src: GDSCRIPT_TAGS_QUERY,
+        },
+        "swift" => LangEntry {
+            language: tree_sitter_swift::language(),
+            query_src: tree_sitter_swift::TAGS_QUERY,
         },
         _ => return None,
     };
@@ -139,4 +193,92 @@ pub fn extract_tags(fname: &str, rel_fname: &str) -> Vec<Tag> {
     }
 
     tags
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_tags, TagKind};
+    use std::io::Write;
+
+    fn write_temp(name: &str, contents: &str) -> (String, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join("soupify_tags_tests");
+        std::fs::create_dir_all(&dir).ok();
+        let path = dir.join(name);
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(contents.as_bytes()).unwrap();
+        (path.to_string_lossy().to_string(), path)
+    }
+
+    #[test]
+    fn extracts_gdscript_definitions_and_calls() {
+        let src = "extends Node\n\
+                   class_name Enemy\n\
+                   signal hit_landed(damage)\n\
+                   var max_health := 100\n\
+                   func take_damage(amount: int) -> void:\n\
+                       apply_hit(amount)\n\
+                   func apply_hit(_amount: int) -> void:\n\
+                       pass\n";
+        let (fname, _path) = write_temp("enemy.gd", src);
+        let tags = extract_tags(&fname, "enemy.gd");
+
+        let def_names: Vec<&str> = tags
+            .iter()
+            .filter(|t| t.kind == TagKind::Def)
+            .map(|t| t.name.as_str())
+            .collect();
+
+        assert!(def_names.contains(&"Enemy"), "defs: {:?}", def_names);
+        assert!(def_names.contains(&"take_damage"), "defs: {:?}", def_names);
+        assert!(def_names.contains(&"apply_hit"), "defs: {:?}", def_names);
+        assert!(def_names.contains(&"hit_landed"), "defs: {:?}", def_names);
+        assert!(def_names.contains(&"max_health"), "defs: {:?}", def_names);
+
+        let ref_names: Vec<&str> = tags
+            .iter()
+            .filter(|t| t.kind == TagKind::Ref)
+            .map(|t| t.name.as_str())
+            .collect();
+        assert!(ref_names.contains(&"apply_hit"), "refs: {:?}", ref_names);
+
+        let take_damage_line = tags
+            .iter()
+            .find(|t| t.name == "take_damage")
+            .map(|t| t.line)
+            .unwrap();
+        assert!(take_damage_line >= 5 && take_damage_line <= 6);
+    }
+
+    #[test]
+    fn extracts_swift_definitions() {
+        let src = "protocol Drawable {\n\
+                    func draw()\n\
+                   }\n\
+                   class Shape: Drawable {\n\
+                       let name: String\n\
+                       func draw() { print(\"x\") }\n\
+                   }\n\
+                   struct Point { var x: Double }\n\
+                   enum Color { case red }\n\
+                   func makeShape() -> Shape { return Shape() }\n";
+        let (fname, _path) = write_temp("App.swift", src);
+        let tags = extract_tags(&fname, "App.swift");
+
+        let def_names: Vec<&str> = tags
+            .iter()
+            .filter(|t| t.kind == TagKind::Def)
+            .map(|t| t.name.as_str())
+            .collect();
+
+        assert!(def_names.contains(&"Drawable"), "defs: {:?}", def_names);
+        assert!(def_names.contains(&"Shape"), "defs: {:?}", def_names);
+        assert!(def_names.contains(&"makeShape"), "defs: {:?}", def_names);
+    }
+
+    #[test]
+    fn unknown_extension_yields_no_tags() {
+        let (fname, _path) = write_temp("notes.txt", "func nothing here");
+        let tags = extract_tags(&fname, "notes.txt");
+        assert!(tags.is_empty());
+    }
 }

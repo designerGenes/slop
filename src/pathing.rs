@@ -269,7 +269,43 @@ fn collect_path(
         // max_depth of 0 means immediate children only (depth 1 from input)
         // max_depth of usize::MAX means full recursion
         let base_depth = input.components().count();
-        let walker = WalkDir::new(input).follow_links(false);
+        // VCS/build/output trees are never useful in a soup and routinely hold
+        // binary blobs (git loose objects, compiled artifacts) that would abort
+        // the run. Prune them at the directory level so we never descend.
+        const SKIP_DIRS: &[&str] = &[
+            ".git",
+            ".svn",
+            ".hg",
+            ".godot",
+            "node_modules",
+            "__pycache__",
+            "venv",
+            "env",
+            ".venv",
+            "target",
+            "build",
+            "dist",
+            ".soup-out",
+        ];
+        const SKIP_EXTS: &[&str] = &[
+            "import",
+            "uid",
+            "md5",
+        ];
+        let walker = WalkDir::new(input)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|entry| {
+                if entry.depth() == 0 {
+                    return true;
+                }
+                if entry.file_type().is_dir() {
+                    let name = entry.file_name().to_string_lossy();
+                    return !SKIP_DIRS.contains(&name.as_ref());
+                }
+                true
+            });
+
         
         // Determine if this is the current directory (for shallow mode depth calculation)
         let is_current_dir = {
@@ -326,6 +362,15 @@ fn collect_path(
             }
 
             if entry_metadata.is_file() && !exclusion_matcher.should_exclude(entry_path) {
+                if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
+                    if SKIP_EXTS.contains(&ext) {
+                        continue;
+                    }
+                }
+                if !is_plaintext(entry_path) {
+                    eprintln!("warning: skipping non-text file: {}", entry_path.display());
+                    continue;
+                }
                 if seen.insert(entry_path.to_path_buf()) {
                     files.push(entry_path.to_path_buf());
                 }
@@ -335,6 +380,58 @@ fn collect_path(
     }
 
     Err(SoupifyError::UnsupportedFileType(input.to_path_buf()))
+}
+
+/// Heuristic check used while walking a directory: a file is treated as
+/// non-text (and skipped from the soup) if its leading bytes contain a NUL
+/// byte. This excludes binary artifacts such as `.DS_Store`, images, and
+/// audio that would otherwise abort the run, while leaving explicit
+/// single-file inputs untouched (those still surface a hard
+/// `Utf8DecodeFailure`). Text files never contain NUL bytes, so this avoids
+/// false positives on valid UTF-8 that happens to split a multibyte
+/// sequence at the read boundary.
+///
+/// Also detects Godot resource files (`.tscn`/`.tres`) that contain
+/// embedded `PackedByteArray(...)` texture data — these are technically
+/// UTF-8 text but hold megabytes of comma-separated integer pixel data
+/// that bloats the soup without value.
+fn is_plaintext(path: &Path) -> bool {
+    use std::io::Read;
+
+    let mut file = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return true,
+    };
+
+    let mut buf = [0u8; 8192];
+    let n = match file.read(&mut buf) {
+        Ok(n) => n,
+        Err(_) => return true,
+    };
+
+    if buf[..n].contains(&0) {
+        return false;
+    }
+
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        if (ext == "tscn" || ext == "tres") && has_packed_byte_array(&buf[..n]) {
+            return false;
+        }
+    }
+
+    true
+}
+
+/// Checks whether a byte buffer contains the `PackedByteArray(` marker,
+/// indicating an embedded binary blob in a Godot resource file.
+fn has_packed_byte_array(bytes: &[u8]) -> bool {
+    const MARKER: &[u8] = b"PackedByteArray(";
+    if bytes.len() < MARKER.len() {
+        return false;
+    }
+    bytes
+        .windows(MARKER.len())
+        .any(|window| window == MARKER)
 }
 
 fn compare_paths_for_output(left: &PathBuf, right: &PathBuf) -> std::cmp::Ordering {

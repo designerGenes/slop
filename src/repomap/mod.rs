@@ -153,7 +153,7 @@ pub fn discover_source_files(root: &Path) -> Vec<String> {
     let supported_exts: HashSet<&str> = HashSet::from([
         "rs", "py", "js", "jsx", "mjs", "cjs", "ts", "tsx",
         "go", "c", "h", "cpp", "cc", "cxx", "hpp", "hxx",
-        "java", "rb",
+        "java", "rb", "gd", "swift",
     ]);
 
     let mut files = Vec::new();

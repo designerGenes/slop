@@ -24,7 +24,21 @@ pub fn run() -> Result<(), SoupifyError> {
     }
     let args = parse_cli_args()?;
     let config = load_config();
+
+    // Sync Sharktopus rules on every invocation so config changes propagate.
+    if let Err(error) = sync() {
+        eprintln!("warning: failed to sync Sharktopus rules: {error}");
+    }
+
     run_with_opener(&args, &config, &SystemOutputDirOpener)
+}
+
+pub fn sync() -> Result<Vec<String>, SoupifyError> {
+    if let Err(error) = config::ensure_config_dir() {
+        eprintln!("warning: failed to create config directory: {error}");
+    }
+    let config = load_config();
+    sharktopus::ensure_rules(&config)
 }
 
 pub fn run_with_opener(
