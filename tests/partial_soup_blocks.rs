@@ -128,3 +128,50 @@ fn desoupify_applies_partial_block_despite_base_sha_drift() {
         "round1\nupdated line two\ncontent\n"
     );
 }
+
+#[test]
+fn desoupify_partial_block_is_idempotent_across_runs() {
+    let temp = tempdir().expect("tempdir should exist");
+    let path = temp.path().join("source.md");
+    let soup_file = temp.path().join("changes.soup");
+
+    fs::write(&path, "line1\nline2\nline3\nline4\n").expect("seed file should be written");
+    fs::write(
+        &soup_file,
+        format!(
+            concat!(
+                "#SOUP \"{}\" #SOUP_PARTIAL_LINES 2-3 #SOUPED_LINES 3 #SOUP_TRAILING_NEWLINE 1\n",
+                "line2 changed\nline3 changed\nline 3.1 new line!"
+            ),
+            path.display()
+        ),
+    )
+    .expect("soup file should be written");
+
+    let expected = "line1\nline2 changed\nline3 changed\nline 3.1 new line!\nline4\n";
+
+    cargo_bin()
+        .args(["-d"])
+        .arg(&soup_file)
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(&path).expect("file should be updated after first run"),
+        expected
+    );
+
+    // Forgetfully re-run desoupify against the same soup document.
+    cargo_bin()
+        .args(["-d"])
+        .arg(&soup_file)
+        .assert()
+        .success()
+        .stderr(contains("already applied"));
+
+    assert_eq!(
+        fs::read_to_string(&path).expect("file should be unchanged after second run"),
+        expected,
+        "second desoupify run must not corrupt the already-updated file"
+    );
+}

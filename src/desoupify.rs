@@ -230,7 +230,9 @@ fn looks_like_soup_file(path: &Path) -> bool {
         return false;
     };
     contents.lines().next().map_or(false, |first_line| {
-        first_line.starts_with("#SOUP ") || first_line.starts_with("#SOUP_META ")
+        first_line.starts_with("#SOUP ")
+            || first_line.starts_with("#SOUP_META ")
+            || first_line.starts_with("#SOUP_AUTO_UNSOUPIFY")
     })
 }
 
@@ -349,6 +351,24 @@ fn descendant_block_matches(selector: &Path, document: &SoupDocument) -> Vec<usi
         .collect()
 }
 
+fn partial_block_already_applied(
+    existing_lines: &[String],
+    range: &SoupPartialRange,
+    replacement_lines: &[String],
+) -> bool {
+    if replacement_lines.is_empty() {
+        return false;
+    }
+
+    let start = range.start_line;
+    let end = start - 1 + replacement_lines.len();
+    if end > existing_lines.len() {
+        return false;
+    }
+
+    existing_lines[start - 1..end] == replacement_lines[..]
+}
+
 fn reconstruct_contents(lines: &[String], trailing_newline: bool) -> String {
     let mut contents = lines.join("\n");
     if trailing_newline {
@@ -384,6 +404,16 @@ fn apply_partial_block(
             existing_lines.len(),
             path.display()
         )));
+    }
+
+    if partial_block_already_applied(&existing_lines, range, replacement_lines) {
+        eprintln!(
+            "note: partial soup block for {} lines {}-{} already applied; skipping (idempotent)",
+            path.display(),
+            range.start_line,
+            range.end_line
+        );
+        return Ok(existing);
     }
 
     let mut merged = Vec::with_capacity(
@@ -586,5 +616,82 @@ mod tests {
         assert_eq!(direct.1.meta_blocks.len(), 1);
         assert_eq!(direct.1.blocks.len(), 1);
         assert_eq!(direct.1.blocks[0].content_lines, vec!["hello"]);
+    }
+
+    #[test]
+    fn partial_block_is_idempotent_when_replacement_adds_a_line() {
+        let temp = tempdir().expect("tempdir should exist");
+        let path = temp.path().join("file.txt");
+        fs::write(&path, "line1\nline2\nline3\nline4\n").expect("seed file should be written");
+
+        let range = SoupPartialRange {
+            start_line: 2,
+            end_line: 3,
+        };
+        let replacement = vec![
+            "line2 changed".to_string(),
+            "line3 changed".to_string(),
+            "line 3.1 new line!".to_string(),
+        ];
+
+        let first = apply_partial_block(&path, &range, &replacement, true)
+            .expect("first apply should succeed");
+        assert_eq!(
+            first,
+            "line1\nline2 changed\nline3 changed\nline 3.1 new line!\nline4\n"
+        );
+        fs::write(&path, &first).expect("first application should be persisted");
+
+        let second = apply_partial_block(&path, &range, &replacement, true)
+            .expect("second apply should succeed");
+
+        assert_eq!(
+            second, first,
+            "re-running desoupify on an already-applied partial block must leave the file unchanged"
+        );
+    }
+
+    #[test]
+    fn partial_block_is_idempotent_when_replacement_removes_a_line() {
+        let temp = tempdir().expect("tempdir should exist");
+        let path = temp.path().join("file.txt");
+        fs::write(&path, "alpha\nbeta\ngamma\ndelta\n").expect("seed file should be written");
+
+        let range = SoupPartialRange {
+            start_line: 2,
+            end_line: 3,
+        };
+        let replacement = vec!["beta only".to_string()];
+
+        let first = apply_partial_block(&path, &range, &replacement, true)
+            .expect("first apply should succeed");
+        assert_eq!(first, "alpha\nbeta only\ndelta\n");
+        fs::write(&path, &first).expect("first application should be persisted");
+
+        let second = apply_partial_block(&path, &range, &replacement, true)
+            .expect("second apply should succeed");
+
+        assert_eq!(
+            second, first,
+            "re-running desoupify after a line-removing partial block must not corrupt the file"
+        );
+    }
+
+    #[test]
+    fn partial_block_reapplies_when_content_does_not_match() {
+        let temp = tempdir().expect("tempdir should exist");
+        let path = temp.path().join("file.txt");
+        fs::write(&path, "one\ntwo\nthree\n").expect("seed file should be written");
+
+        let range = SoupPartialRange {
+            start_line: 2,
+            end_line: 2,
+        };
+        let replacement = vec!["two updated".to_string()];
+
+        let result = apply_partial_block(&path, &range, &replacement, true)
+            .expect("apply should succeed when content has not been applied yet");
+
+        assert_eq!(result, "one\ntwo updated\nthree\n");
     }
 }
