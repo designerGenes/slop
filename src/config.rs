@@ -14,6 +14,7 @@ pub struct Config {
     pub to_desoupify_folder: Option<PathBuf>,
     pub soupified_folder: Option<PathBuf>,
     pub include_graph: bool,
+    pub respect_gitignore: bool,
     pub graph_map_tokens: usize,
     pub graph_format: String,
     pub graph_force_include_supertypes: bool,
@@ -39,6 +40,7 @@ impl Default for Config {
             to_desoupify_folder: None,
             soupified_folder: None,
             include_graph: false,
+            respect_gitignore: false,
             graph_map_tokens: 2048,
             graph_format: "repomap".to_string(),
             graph_force_include_supertypes: true,
@@ -103,6 +105,10 @@ pub fn default_config_yaml() -> String {
          # Include a code-graph metadata block when soupifying. Override per-run\n\
          # with --include-graph.\n\
          include_graph: {include_graph}\n\n\
+         # If true, Soupify will skip any files or folders matched by the\n\
+         # target repo's .gitignore when walking a directory. Override\n\
+         # per-run with --respect-gitignore.\n\
+         respect_gitignore: {respect_gitignore}\n\n\
          # RepoMapper --map-tokens; compactness lever for the graph.\n\
          graph_map_tokens: {graph_tokens}\n\n\
          # Graph format: repomap | dot | json | mermaid\n\
@@ -136,6 +142,7 @@ pub fn default_config_yaml() -> String {
         to_desoupify = "~/.soupify/to_desoupify",
         soupified = "~/.soupify/soupified",
         include_graph = false,
+        respect_gitignore = false,
         graph_tokens = 2048,
         graph_format = "repomap",
         force_supertypes = true,
@@ -228,6 +235,7 @@ mod tests {
              to_desoupify_folder: /tmp/to_desoupify\n\
              soupified_folder: /tmp/soupified\n\
              include_graph: true\n\
+             respect_gitignore: true\n\
              graph_map_tokens: 1024\n\
              graph_format: dot\n\
              graph_force_include_supertypes: false\n",
@@ -247,6 +255,7 @@ mod tests {
             Some(PathBuf::from("/tmp/soupified"))
         );
         assert!(config.include_graph);
+        assert!(config.respect_gitignore);
         assert_eq!(config.graph_map_tokens, 1024);
         assert_eq!(config.graph_format, "dot");
         assert!(!config.graph_force_include_supertypes);
@@ -261,6 +270,7 @@ mod tests {
         assert!(config.to_desoupify_folder.is_none());
         assert!(config.soupified_folder.is_none());
         assert!(!config.include_graph);
+        assert!(!config.respect_gitignore);
         assert_eq!(config.graph_map_tokens, 2048);
         assert_eq!(config.graph_format, "repomap");
         assert!(config.graph_force_include_supertypes);
@@ -275,6 +285,7 @@ mod tests {
         assert!(yaml.contains("to_desoupify_folder:"));
         assert!(yaml.contains("soupified_folder:"));
         assert!(yaml.contains("include_graph:"));
+        assert!(yaml.contains("respect_gitignore:"));
         assert!(yaml.contains("graph_map_tokens:"));
         assert!(yaml.contains("graph_format:"));
         assert!(yaml.contains("graph_force_include_supertypes:"));

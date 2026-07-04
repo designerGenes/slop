@@ -506,3 +506,92 @@ fn excludes_all_files_results_in_zero_files_error() {
         .failure()
         .stderr(predicates::str::contains("expanded to zero files"));
 }
+
+#[test]
+fn respects_gitignore_when_flag_passed() {
+    let temp = tempdir().expect("tempdir should exist");
+    let directory = temp.path().join("folder1");
+    fs::create_dir_all(&directory).expect("directory should be created");
+    fs::write(directory.join(".gitignore"), "ignored.md\n")
+        .expect("gitignore should be written");
+    fs::write(directory.join("file1.md"), "one").expect("file should be written");
+    fs::write(directory.join("ignored.md"), "two").expect("file should be written");
+    let output_dir = temp.path().join("out");
+
+    cargo_bin()
+        .arg("-r")
+        .arg("--respect-gitignore")
+        .arg(&directory)
+        .arg("-o")
+        .arg(&output_dir)
+        .assert()
+        .success();
+
+    // file1.md + the .gitignore file itself (dotfiles still soupify by
+    // default); ignored.md is pruned because .gitignore lists it.
+    let soup = fs::read_to_string(output_dir.join("file1_gitignore.md"))
+        .expect("soup file should exist");
+    assert!(soup.contains("one"));
+    assert!(!soup.contains("two"));
+}
+
+#[test]
+fn ignores_gitignore_contents_without_flag() {
+    let temp = tempdir().expect("tempdir should exist");
+    let directory = temp.path().join("folder1");
+    fs::create_dir_all(&directory).expect("directory should be created");
+    fs::write(directory.join(".gitignore"), "ignored.md\n")
+        .expect("gitignore should be written");
+    fs::write(directory.join("file1.md"), "one").expect("file should be written");
+    fs::write(directory.join("ignored.md"), "two").expect("file should be written");
+    let output_dir = temp.path().join("out");
+
+    cargo_bin()
+        .arg("-r")
+        .arg(&directory)
+        .arg("-o")
+        .arg(&output_dir)
+        .assert()
+        .success();
+
+    // Without --respect-gitignore, .gitignore is just another file - nothing
+    // is pruned, matching existing (pre-flag) behavior.
+    let soup = fs::read_to_string(output_dir.join("file1_gitignore_ignored.md"))
+        .expect("soup file should exist");
+    assert!(soup.contains("one"));
+    assert!(soup.contains("two"));
+}
+
+#[test]
+fn respect_gitignore_config_default_enables_pruning_without_flag() {
+    let temp = tempdir().expect("tempdir should exist");
+    let home = temp.path().join("home");
+    fs::create_dir_all(home.join(".config/soupify")).expect("config dir should be created");
+    fs::write(
+        home.join(".config/soupify/config.yaml"),
+        "respect_gitignore: true\n",
+    )
+    .expect("config should be written");
+
+    let directory = temp.path().join("folder1");
+    fs::create_dir_all(&directory).expect("directory should be created");
+    fs::write(directory.join(".gitignore"), "ignored.md\n")
+        .expect("gitignore should be written");
+    fs::write(directory.join("file1.md"), "one").expect("file should be written");
+    fs::write(directory.join("ignored.md"), "two").expect("file should be written");
+    let output_dir = temp.path().join("out");
+
+    cargo_bin()
+        .env("HOME", &home)
+        .arg("-r")
+        .arg(&directory)
+        .arg("-o")
+        .arg(&output_dir)
+        .assert()
+        .success();
+
+    let soup = fs::read_to_string(output_dir.join("file1_gitignore.md"))
+        .expect("soup file should exist");
+    assert!(soup.contains("one"));
+    assert!(!soup.contains("two"));
+}

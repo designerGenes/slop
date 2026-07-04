@@ -22,6 +22,8 @@ struct RawCliArgs {
     recursive: bool,
     #[arg(short = 'x', long = "exclude")]
     exclude: Vec<String>,
+    #[arg(long = "respect-gitignore")]
+    respect_gitignore: bool,
     #[arg(short = 'g', long = "include-graph")]
     include_graph: bool,
     #[arg(long = "soupify-to")]
@@ -93,6 +95,7 @@ where
         recursive: parsed.recursive,
         inputs: parsed.inputs,
         exclude: parsed.exclude,
+        respect_gitignore: parsed.respect_gitignore,
         include_graph: parsed.include_graph,
         soupify_to: parsed.soupify_to,
         graph_format: parsed.graph_format,
@@ -136,6 +139,19 @@ mod tests {
     fn parses_include_graph_flag() {
         let result = parse_cli_args_from(["soupify", "-g", "file.txt"]).expect("should parse");
         assert!(result.include_graph);
+    }
+
+    #[test]
+    fn parses_respect_gitignore_flag() {
+        let result = parse_cli_args_from(["soupify", "--respect-gitignore", "file.txt"])
+            .expect("should parse");
+        assert!(result.respect_gitignore);
+    }
+
+    #[test]
+    fn respect_gitignore_defaults_to_false() {
+        let result = parse_cli_args_from(["soupify", "file.txt"]).expect("should parse");
+        assert!(!result.respect_gitignore);
     }
 
     #[test]

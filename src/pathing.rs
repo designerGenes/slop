@@ -2,10 +2,40 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+use ignore::WalkBuilder;
 use regex::Regex;
 use walkdir::WalkDir;
 
+use crate::config::Config;
 use crate::error::SoupifyError;
+
+// VCS/build/output trees are never useful in a soup and routinely hold
+// binary blobs (git loose objects, compiled artifacts) that would abort
+// the run. Prune them at the directory level so we never descend, whether
+// or not --respect-gitignore is active.
+const SKIP_DIRS: &[&str] = &[
+    ".git",
+    ".svn",
+    ".hg",
+    ".godot",
+    "node_modules",
+    "__pycache__",
+    "venv",
+    "env",
+    ".venv",
+    "target",
+    "build",
+    "dist",
+    ".soup-out",
+];
+const SKIP_EXTS: &[&str] = &["import", "uid", "md5"];
+
+/// Whether directory walks should skip files/folders matched by the repo's
+/// `.gitignore`. The CLI flag takes precedence; otherwise falls back to the
+/// persistent `respect_gitignore` config setting.
+pub fn should_respect_gitignore(args_respect_gitignore: bool, config: &Config) -> bool {
+    args_respect_gitignore || config.respect_gitignore
+}
 
 pub struct ExclusionMatcher {
     patterns: Vec<ExclusionPattern>,
@@ -162,6 +192,7 @@ pub fn collect_source_files(
     inputs: &[PathBuf],
     max_depth: Option<usize>,
     exclude: &[String],
+    respect_gitignore: bool,
 ) -> Result<Vec<PathBuf>, SoupifyError> {
     let mut seen = BTreeSet::new();
     let mut files = Vec::new();
@@ -169,7 +200,14 @@ pub fn collect_source_files(
 
     for input in inputs {
         let depth = max_depth.unwrap_or(0);
-        collect_path(input, &mut seen, &mut files, depth, &exclusion_matcher)?;
+        collect_path(
+            input,
+            &mut seen,
+            &mut files,
+            depth,
+            &exclusion_matcher,
+            respect_gitignore,
+        )?;
     }
 
     files.sort_by(compare_paths_for_output);
@@ -237,6 +275,7 @@ fn collect_path(
     files: &mut Vec<PathBuf>,
     max_depth: usize,
     exclusion_matcher: &ExclusionMatcher,
+    respect_gitignore: bool,
 ) -> Result<(), SoupifyError> {
     let metadata = fs::symlink_metadata(input).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -265,121 +304,211 @@ fn collect_path(
 
     // If it's a directory, traverse it with the specified depth
     if metadata.is_dir() {
-        // Use WalkDir but limit depth if max_depth is 0 (shallow) or usize::MAX (full)
-        // max_depth of 0 means immediate children only (depth 1 from input)
-        // max_depth of usize::MAX means full recursion
-        let base_depth = input.components().count();
-        // VCS/build/output trees are never useful in a soup and routinely hold
-        // binary blobs (git loose objects, compiled artifacts) that would abort
-        // the run. Prune them at the directory level so we never descend.
-        const SKIP_DIRS: &[&str] = &[
-            ".git",
-            ".svn",
-            ".hg",
-            ".godot",
-            "node_modules",
-            "__pycache__",
-            "venv",
-            "env",
-            ".venv",
-            "target",
-            "build",
-            "dist",
-            ".soup-out",
-        ];
-        const SKIP_EXTS: &[&str] = &[
-            "import",
-            "uid",
-            "md5",
-        ];
-        let walker = WalkDir::new(input)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|entry| {
-                if entry.depth() == 0 {
-                    return true;
-                }
-                if entry.file_type().is_dir() {
-                    let name = entry.file_name().to_string_lossy();
-                    return !SKIP_DIRS.contains(&name.as_ref());
-                }
-                true
-            });
-
-        
-        // Determine if this is the current directory (for shallow mode depth calculation)
-        let is_current_dir = {
-            let cwd = std::env::current_dir().ok();
-            let resolved = std::fs::canonicalize(input).ok();
-            cwd.as_ref().and_then(|c| resolved.as_ref().map(|r| c == r)).unwrap_or(false)
-        };
-        
-        for entry in walker {
-            let entry = entry.map_err(|error| {
-                let path = error
-                    .path()
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| input.to_path_buf());
-                SoupifyError::FileReadFailure {
-                    path,
-                    source: std::io::Error::other(error.to_string()),
-                }
-            })?;
-
-            let entry_path = entry.path();
-            // Calculate depth relative to input (1 = immediate child, 2 = grandchild, etc.)
-            let entry_depth = entry_path.components().count() - base_depth;
-            
-            // For shallow mode (max_depth=0):
-            // - If input is current directory (like "."), we want depth <= 2 (files in current dir + immediate children of subdirs)
-            // - If input is a subdirectory, we want depth <= 1 (files directly in this dir only)
-            // For full recursion (max_depth=usize::MAX), we want everything
-            let max_allowed_depth = if max_depth == 0 {
-                if is_current_dir { 2 } else { 1 }
-            } else {
-                max_depth
-            };
-            
-            // Skip if deeper than max_allowed_depth
-            if entry_depth > max_allowed_depth {
-                continue;
-            }
-
-            let entry_metadata = fs::symlink_metadata(entry_path).map_err(|error| {
-                SoupifyError::FileReadFailure {
-                    path: entry_path.to_path_buf(),
-                    source: error,
-                }
-            })?;
-
-            let entry_type = entry_metadata.file_type();
-            if entry_type.is_symlink() {
-                continue;
-            }
-            
-            if !is_supported_file_type(&entry_type) {
-                return Err(SoupifyError::UnsupportedFileType(entry_path.to_path_buf()));
-            }
-
-            if entry_metadata.is_file() && !exclusion_matcher.should_exclude(entry_path) {
-                if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
-                    if SKIP_EXTS.contains(&ext) {
-                        continue;
-                    }
-                }
-                if !is_plaintext(entry_path) {
-                    eprintln!("warning: skipping non-text file: {}", entry_path.display());
-                    continue;
-                }
-                if seen.insert(entry_path.to_path_buf()) {
-                    files.push(entry_path.to_path_buf());
-                }
-            }
+        if respect_gitignore {
+            return collect_dir_respecting_gitignore(
+                input,
+                seen,
+                files,
+                max_depth,
+                exclusion_matcher,
+            );
         }
-        return Ok(());
+        return collect_dir(input, seen, files, max_depth, exclusion_matcher);
     }
 
     Err(SoupifyError::UnsupportedFileType(input.to_path_buf()))
+}
+
+/// Whether `input` is the process's current working directory. Shallow mode
+/// (max_depth == 0) allows one extra level of depth when souping "." so that
+/// files inside immediate subdirectories are still picked up.
+fn is_current_dir(input: &Path) -> bool {
+    let cwd = std::env::current_dir().ok();
+    let resolved = std::fs::canonicalize(input).ok();
+    cwd.as_ref()
+        .and_then(|c| resolved.as_ref().map(|r| c == r))
+        .unwrap_or(false)
+}
+
+fn max_allowed_depth(max_depth: usize, input: &Path) -> usize {
+    // For shallow mode (max_depth=0):
+    // - If input is current directory (like "."), we want depth <= 2 (files in current dir + immediate children of subdirs)
+    // - If input is a subdirectory, we want depth <= 1 (files directly in this dir only)
+    // For full recursion (max_depth=usize::MAX), we want everything
+    if max_depth == 0 {
+        if is_current_dir(input) { 2 } else { 1 }
+    } else {
+        max_depth
+    }
+}
+
+/// Default directory walk: no `.gitignore` awareness, just the hardcoded
+/// `SKIP_DIRS`/`SKIP_EXTS` prunes plus whatever `-x/--exclude` supplies.
+fn collect_dir(
+    input: &Path,
+    seen: &mut BTreeSet<PathBuf>,
+    files: &mut Vec<PathBuf>,
+    max_depth: usize,
+    exclusion_matcher: &ExclusionMatcher,
+) -> Result<(), SoupifyError> {
+    // Use WalkDir but limit depth if max_depth is 0 (shallow) or usize::MAX (full)
+    // max_depth of 0 means immediate children only (depth 1 from input)
+    // max_depth of usize::MAX means full recursion
+    let base_depth = input.components().count();
+    let walker = WalkDir::new(input)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            if entry.depth() == 0 {
+                return true;
+            }
+            if entry.file_type().is_dir() {
+                let name = entry.file_name().to_string_lossy();
+                return !SKIP_DIRS.contains(&name.as_ref());
+            }
+            true
+        });
+
+    let max_allowed = max_allowed_depth(max_depth, input);
+
+    for entry in walker {
+        let entry = entry.map_err(|error| {
+            let path = error
+                .path()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| input.to_path_buf());
+            SoupifyError::FileReadFailure {
+                path,
+                source: std::io::Error::other(error.to_string()),
+            }
+        })?;
+
+        let entry_path = entry.path();
+        // Calculate depth relative to input (1 = immediate child, 2 = grandchild, etc.)
+        let entry_depth = entry_path.components().count() - base_depth;
+
+        // Skip if deeper than max_allowed_depth
+        if entry_depth > max_allowed {
+            continue;
+        }
+
+        let entry_metadata = fs::symlink_metadata(entry_path).map_err(|error| {
+            SoupifyError::FileReadFailure {
+                path: entry_path.to_path_buf(),
+                source: error,
+            }
+        })?;
+
+        let entry_type = entry_metadata.file_type();
+        if entry_type.is_symlink() {
+            continue;
+        }
+
+        if !is_supported_file_type(&entry_type) {
+            return Err(SoupifyError::UnsupportedFileType(entry_path.to_path_buf()));
+        }
+
+        if entry_metadata.is_file() && !exclusion_matcher.should_exclude(entry_path) {
+            if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
+                if SKIP_EXTS.contains(&ext) {
+                    continue;
+                }
+            }
+            if !is_plaintext(entry_path) {
+                eprintln!("warning: skipping non-text file: {}", entry_path.display());
+                continue;
+            }
+            if seen.insert(entry_path.to_path_buf()) {
+                files.push(entry_path.to_path_buf());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `--respect-gitignore` directory walk: identical shape to `collect_dir`,
+/// but sourced from `ignore::WalkBuilder` so that any `.gitignore` file
+/// found at or below `input` (including nested ones, with full negation
+/// support) prunes matching files and folders. Scoped tightly to just
+/// `.gitignore`: global git config, `.git/info/exclude`, plain `.ignore`
+/// files, and ignore files from directories *above* `input` are all
+/// disabled so behavior only ever depends on the repo's own `.gitignore`
+/// content. `require_git` is disabled so this works even when `input` isn't
+/// inside an actual git repository yet (e.g. before the first commit).
+fn collect_dir_respecting_gitignore(
+    input: &Path,
+    seen: &mut BTreeSet<PathBuf>,
+    files: &mut Vec<PathBuf>,
+    max_depth: usize,
+    exclusion_matcher: &ExclusionMatcher,
+) -> Result<(), SoupifyError> {
+    let max_allowed = max_allowed_depth(max_depth, input);
+
+    let mut builder = WalkBuilder::new(input);
+    builder
+        .follow_links(false)
+        .hidden(false) // soupify has always included dotfiles; only .gitignore rules should newly exclude anything
+        .parents(false) // don't climb above `input` looking for more .gitignore files
+        .ignore(false) // plain .ignore files are a ripgrep convention, not requested here
+        .git_ignore(true)
+        .git_global(false) // scope strictly to the repo's own .gitignore, not the user's machine-wide config
+        .git_exclude(false) // scope strictly to .gitignore, not .git/info/exclude
+        .require_git(false) // honor .gitignore even if `input` isn't (yet) inside a real git repo
+        .filter_entry(|entry| {
+            if entry.depth() == 0 {
+                return true;
+            }
+            if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                let name = entry.file_name().to_string_lossy();
+                return !SKIP_DIRS.contains(&name.as_ref());
+            }
+            true
+        });
+
+    for entry in builder.build() {
+        let entry = entry.map_err(|error| SoupifyError::FileReadFailure {
+            path: input.to_path_buf(),
+            source: std::io::Error::other(error.to_string()),
+        })?;
+
+        let entry_depth = entry.depth();
+        if entry_depth > max_allowed {
+            continue;
+        }
+
+        let entry_path = entry.path();
+        let entry_metadata = fs::symlink_metadata(entry_path).map_err(|error| {
+            SoupifyError::FileReadFailure {
+                path: entry_path.to_path_buf(),
+                source: error,
+            }
+        })?;
+
+        let entry_type = entry_metadata.file_type();
+        if entry_type.is_symlink() {
+            continue;
+        }
+
+        if !is_supported_file_type(&entry_type) {
+            return Err(SoupifyError::UnsupportedFileType(entry_path.to_path_buf()));
+        }
+
+        if entry_metadata.is_file() && !exclusion_matcher.should_exclude(entry_path) {
+            if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
+                if SKIP_EXTS.contains(&ext) {
+                    continue;
+                }
+            }
+            if !is_plaintext(entry_path) {
+                eprintln!("warning: skipping non-text file: {}", entry_path.display());
+                continue;
+            }
+            if seen.insert(entry_path.to_path_buf()) {
+                files.push(entry_path.to_path_buf());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Heuristic check used while walking a directory: a file is treated as
@@ -487,7 +616,11 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{build_output_filename, collect_source_files, filename_token, resolve_absolute};
+    use super::{
+        build_output_filename, collect_source_files, filename_token, resolve_absolute,
+        should_respect_gitignore,
+    };
+    use crate::config::Config;
 
     #[test]
     fn resolves_relative_inputs_to_absolute_paths() {
@@ -507,7 +640,8 @@ mod tests {
         fs::write(root.join("nested/deeper/file.md"), "nested").expect("file should be written");
 
         let files =
-            collect_source_files(std::slice::from_ref(&root), Some(usize::MAX), &[]).expect("files should collect");
+            collect_source_files(std::slice::from_ref(&root), Some(usize::MAX), &[], false)
+                .expect("files should collect");
 
         assert_eq!(files.len(), 3);
         assert!(files.contains(&root.join("visible.txt")));
@@ -523,7 +657,8 @@ mod tests {
         let file = dir.join("alpha.txt");
         fs::write(&file, "alpha").expect("file should be written");
 
-        let files = collect_source_files(&[file.clone(), dir], Some(usize::MAX), &[]).expect("files should collect");
+        let files = collect_source_files(&[file.clone(), dir], Some(usize::MAX), &[], false)
+            .expect("files should collect");
         assert_eq!(files, vec![file]);
     }
 
@@ -536,7 +671,8 @@ mod tests {
         fs::write(dir.join("file.txt"), "content").expect("file should be written");
         fs::write(dir.join("subdir/nested.txt"), "nested").expect("file should be written");
 
-        let files = collect_source_files(&[dir.clone()], Some(0), &[]).expect("files should collect");
+        let files = collect_source_files(&[dir.clone()], Some(0), &[], false)
+            .expect("files should collect");
         assert_eq!(files.len(), 1);
         assert!(files.contains(&dir.join("file.txt")));
         assert!(!files.iter().any(|p| p.ends_with("nested.txt")));
@@ -553,7 +689,7 @@ mod tests {
         fs::write(&file2, "content2").expect("file should be written");
         fs::write(root.join("subdir/nested.txt"), "nested").expect("file should be written");
 
-        let files = collect_source_files(&[file1.clone(), file2.clone()], Some(0), &[])
+        let files = collect_source_files(&[file1.clone(), file2.clone()], Some(0), &[], false)
             .expect("files should collect");
         assert_eq!(files.len(), 2);
         assert!(files.contains(&file1));
@@ -574,7 +710,8 @@ mod tests {
         let result = unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o644) };
         assert_eq!(result, 0, "mkfifo should succeed");
 
-        let error = collect_source_files(&[fifo], Some(0), &[]).expect_err("fifo should be rejected");
+        let error = collect_source_files(&[fifo], Some(0), &[], false)
+            .expect_err("fifo should be rejected");
         assert!(error.to_string().contains("unsupported file type"));
     }
 
@@ -608,5 +745,136 @@ mod tests {
 
         let filename_graph = build_output_filename(&files, true).expect("filename should build");
         assert_eq!(filename_graph, "file1_file2_file3_file4_graph.md");
+    }
+
+    #[test]
+    fn should_respect_gitignore_respects_flag() {
+        let config = Config::default();
+        assert!(should_respect_gitignore(true, &config));
+        assert!(!should_respect_gitignore(false, &config));
+    }
+
+    #[test]
+    fn should_respect_gitignore_respects_config() {
+        let mut config = Config::default();
+        config.respect_gitignore = true;
+        assert!(should_respect_gitignore(false, &config));
+    }
+
+    #[test]
+    fn does_not_respect_gitignore_by_default() {
+        let temp = tempdir().expect("tempdir should exist");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("directory should be created");
+        fs::write(root.join(".gitignore"), "ignored.txt\n").expect("gitignore should be written");
+        fs::write(root.join("ignored.txt"), "skip").expect("file should be written");
+
+        let files = collect_source_files(&[root.clone()], Some(usize::MAX), &[], false)
+            .expect("files should collect");
+
+        // Without the flag, .gitignore is just another file - it prunes nothing.
+        assert!(files.iter().any(|p| p.ends_with("ignored.txt")));
+    }
+
+    #[test]
+    fn respects_gitignore_when_flag_enabled() {
+        let temp = tempdir().expect("tempdir should exist");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("directory should be created");
+        fs::write(root.join(".gitignore"), "ignored.txt\n").expect("gitignore should be written");
+        fs::write(root.join("visible.txt"), "keep").expect("file should be written");
+        fs::write(root.join("ignored.txt"), "skip").expect("file should be written");
+
+        let files = collect_source_files(&[root.clone()], Some(usize::MAX), &[], true)
+            .expect("files should collect");
+
+        assert!(files.contains(&root.join("visible.txt")));
+        assert!(!files.iter().any(|p| p.ends_with("ignored.txt")));
+        // Dotfiles are still soupified by default - only .gitignore-matched
+        // paths should be newly excluded.
+        assert!(files.contains(&root.join(".gitignore")));
+    }
+
+    #[test]
+    fn respects_nested_gitignore_files() {
+        let temp = tempdir().expect("tempdir should exist");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("sub")).expect("directories should be created");
+        fs::write(root.join("sub/.gitignore"), "secret.txt\n")
+            .expect("gitignore should be written");
+        fs::write(root.join("sub/secret.txt"), "skip").expect("file should be written");
+        fs::write(root.join("sub/keep.txt"), "keep").expect("file should be written");
+
+        let files = collect_source_files(&[root.clone()], Some(usize::MAX), &[], true)
+            .expect("files should collect");
+
+        assert!(files.contains(&root.join("sub/keep.txt")));
+        assert!(!files.iter().any(|p| p.ends_with("secret.txt")));
+    }
+
+    #[test]
+    fn respects_gitignore_directory_patterns() {
+        let temp = tempdir().expect("tempdir should exist");
+        let root = temp.path().join("root");
+        // "generated" isn't in the hardcoded SKIP_DIRS list, so this proves
+        // the exclusion comes from .gitignore parsing, not the safety-net prune.
+        fs::create_dir_all(root.join("generated")).expect("directories should be created");
+        fs::write(root.join(".gitignore"), "generated/\n").expect("gitignore should be written");
+        fs::write(root.join("generated/bundle.js"), "compiled").expect("file should be written");
+        fs::write(root.join("keep.txt"), "keep").expect("file should be written");
+
+        let files = collect_source_files(&[root.clone()], Some(usize::MAX), &[], true)
+            .expect("files should collect");
+
+        assert!(files.contains(&root.join("keep.txt")));
+        assert!(!files.iter().any(|p| p.ends_with("bundle.js")));
+    }
+
+    #[test]
+    fn respects_gitignore_negation_patterns() {
+        let temp = tempdir().expect("tempdir should exist");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("directory should be created");
+        fs::write(root.join(".gitignore"), "*.log\n!important.log\n")
+            .expect("gitignore should be written");
+        fs::write(root.join("debug.log"), "noisy").expect("file should be written");
+        fs::write(root.join("important.log"), "keep me").expect("file should be written");
+
+        let files = collect_source_files(&[root.clone()], Some(usize::MAX), &[], true)
+            .expect("files should collect");
+
+        assert!(files.contains(&root.join("important.log")));
+        assert!(!files.iter().any(|p| p.ends_with("debug.log")));
+    }
+
+    #[test]
+    fn skip_dirs_still_pruned_with_respect_gitignore() {
+        let temp = tempdir().expect("tempdir should exist");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("node_modules")).expect("directories should be created");
+        fs::write(root.join("node_modules/pkg.js"), "vendored").expect("file should be written");
+        fs::write(root.join("keep.txt"), "keep").expect("file should be written");
+
+        let files = collect_source_files(&[root.clone()], Some(usize::MAX), &[], true)
+            .expect("files should collect");
+
+        assert!(files.contains(&root.join("keep.txt")));
+        assert!(!files.iter().any(|p| p.ends_with("pkg.js")));
+    }
+
+    #[test]
+    fn explicit_file_arguments_bypass_gitignore() {
+        let temp = tempdir().expect("tempdir should exist");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("directory should be created");
+        fs::write(root.join(".gitignore"), "secret.txt\n").expect("gitignore should be written");
+        let secret = root.join("secret.txt");
+        fs::write(&secret, "explicit").expect("file should be written");
+
+        // Naming a gitignored file directly still soupifies it - only
+        // directory traversal is pruned by --respect-gitignore.
+        let files = collect_source_files(&[secret.clone()], Some(0), &[], true)
+            .expect("files should collect");
+        assert_eq!(files, vec![secret]);
     }
 }

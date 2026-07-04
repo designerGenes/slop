@@ -8,6 +8,7 @@ pub struct CliArgs {
     pub recursive: bool,
     pub inputs: Vec<PathBuf>,
     pub exclude: Vec<String>,
+    pub respect_gitignore: bool,
     pub include_graph: bool,
     pub soupify_to: Option<PathBuf>,
     pub graph_format: Option<String>,

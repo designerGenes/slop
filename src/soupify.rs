@@ -7,7 +7,7 @@ use crate::graph;
 use crate::models::{CliArgs, SoupMetaBlock, SourceFile};
 use crate::pathing::{
     build_output_filename, collect_source_files, filename_token, resolve_absolute,
-    resolve_output_dir,
+    resolve_output_dir, should_respect_gitignore,
 };
 use crate::secrets;
 use crate::selection;
@@ -39,7 +39,9 @@ pub fn run_soupify(args: &CliArgs, config: &Config) -> Result<PathBuf, SoupifyEr
     }
 
     let max_depth = if args.recursive { Some(usize::MAX) } else { Some(0) };
-    let candidate_files = collect_source_files(&resolved_inputs, max_depth, &args.exclude)?;
+    let respect_gitignore = should_respect_gitignore(args.respect_gitignore, config);
+    let candidate_files =
+        collect_source_files(&resolved_inputs, max_depth, &args.exclude, respect_gitignore)?;
     if candidate_files.is_empty() {
         return Err(SoupifyError::InputExpandedToZeroFiles);
     }

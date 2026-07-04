@@ -66,6 +66,19 @@ soupify -r src/ -x '*.min.js' -x 'node_modules/' -x '__pycache__/'
 
 Exclusion patterns support globs (`*.log`), folder names with trailing slash (`build/`), and regexes (`/test_\d+/`).
 
+VCS/build directories (`.git`, `node_modules`, `target`, `dist`, `build`, `__pycache__`, `.venv`, etc.) are always pruned automatically and don't need `-x`. For everything else your project's `.gitignore` already tracks, use `--respect-gitignore` instead of hand-listing patterns:
+
+```bash
+soupify -r --respect-gitignore src/
+```
+
+This walks the directory the same way `git` would: any file or folder matched by a `.gitignore` found at or below the input path (including nested `.gitignore` files and `!negation` patterns) is skipped. Explicitly naming a gitignored file as a direct argument still soupifies it — only directory traversal is pruned, matching how tools like ripgrep behave. Set it permanently in config so you don't need the flag on every run:
+
+```yaml
+# ~/.config/soupify/config.yaml
+respect_gitignore: true
+```
+
 ---
 
 ### 5. Add a whole-repo code graph
@@ -338,6 +351,7 @@ soupify -d returned.md
 |---|---|---|
 | `soupified_folder` | `~/.soupify/soupified` | Where soup files are written |
 | `include_graph` | `false` | Always include the code graph |
+| `respect_gitignore` | `false` | Always skip files/folders matched by the repo's `.gitignore` |
 | `graph_map_tokens` | `2048` | Token budget for the graph block |
 | `graph_token_model` | `o200k_base` | BPE model used to count graph tokens |
 | `index_dir` | `~/.cache/soupify/index` | Location of the full-text selection index |
