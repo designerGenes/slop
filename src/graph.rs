@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::config::Config;
-use crate::error::SoupifyError;
+use crate::error::SlopError;
 use crate::models::SoupMetaBlock;
 use crate::repomap;
 
@@ -47,12 +47,12 @@ pub fn generate_repomap(
     repo_root: &Path,
     seed_files: &[PathBuf],
     config: &Config,
-) -> Result<SoupMetaBlock, SoupifyError> {
+) -> Result<SoupMetaBlock, SlopError> {
     let map_tokens = config.graph_map_tokens;
 
     let body = repomap::generate_repomap(repo_root, seed_files, map_tokens)
         .ok_or_else(|| {
-            SoupifyError::RepoMapGenerationFailure(
+            SlopError::RepoMapGenerationFailure(
                 "no repository map could be generated".to_string(),
             )
         })?;

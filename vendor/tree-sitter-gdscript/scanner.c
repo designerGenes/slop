@@ -126,16 +126,6 @@ static inline void set_end_character(Delimiter *delimiter, int32_t character) {
     }
 }
 
-static inline const char *delimiter_string(Delimiter *delimiter) {
-    if (delimiter->flags & SingleQuote) {
-        return "\'";
-    }
-    if (delimiter->flags & DoubleQuote) {
-        return "\"";
-    }
-    return "";
-}
-
 typedef struct {
     uint32_t len;
     uint32_t cap;
@@ -243,9 +233,6 @@ bool tree_sitter_gdscript_external_scanner_scan(void *payload, TSLexer *lexer,
 
     bool error_recovery_mode =
         valid_symbols[STRING_CONTENT] && valid_symbols[INDENT];
-    bool within_brackets = valid_symbols[CLOSE_BRACE] ||
-                           valid_symbols[CLOSE_PAREN] ||
-                           valid_symbols[CLOSE_BRACKET];
 
     if (valid_symbols[STRING_CONTENT] && scanner->delimiters->len > 0 &&
         !error_recovery_mode) {

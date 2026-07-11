@@ -3,35 +3,35 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
-use crate::error::SoupifyError;
+use crate::error::SlopError;
 use crate::models::{CliArgs, SoupBlock, SoupDocument, SoupMatchResult, SoupPartialRange};
 use crate::pathing::{resolve_absolute, resolve_output_dir};
-use crate::soup_format::parse_document;
+use crate::slop_format::parse_document;
 
-pub fn find_matching_soup_file(
+pub fn find_matching_slop_file(
     selectors: &[PathBuf],
-    soup_dir: &Path,
-) -> Result<PathBuf, SoupifyError> {
-    match match_soup_file(selectors, soup_dir)? {
+    slop_dir: &Path,
+) -> Result<PathBuf, SlopError> {
+    match match_slop_file(selectors, slop_dir)? {
         SoupMatchResult::One(path) => Ok(path),
-        SoupMatchResult::None => Err(SoupifyError::NoMatchingSoupFile {
+        SoupMatchResult::None => Err(SlopError::NoMatchingSoupFile {
             selectors: selectors.to_vec(),
-            soup_dir: soup_dir.to_path_buf(),
+            slop_dir: slop_dir.to_path_buf(),
         }),
-        SoupMatchResult::Ambiguous(paths) => Err(SoupifyError::AmbiguousSoupFileMatch { paths }),
+        SoupMatchResult::Ambiguous(paths) => Err(SlopError::AmbiguousSoupFileMatch { paths }),
     }
 }
 
-pub fn run_desoupify(args: &CliArgs, config: &Config) -> Result<Vec<PathBuf>, SoupifyError> {
-    let cwd = std::env::current_dir().map_err(|error| SoupifyError::FileReadFailure {
+pub fn run_deslop(args: &CliArgs, config: &Config) -> Result<Vec<PathBuf>, SlopError> {
+    let cwd = std::env::current_dir().map_err(|error| SlopError::FileReadFailure {
         path: PathBuf::from("."),
         source: error,
     })?;
-    let soup_dir = resolve_output_dir(
+    let slop_dir = resolve_output_dir(
         args.output_dir
             .as_deref()
-            .or(args.soupify_to.as_deref())
-            .or(config.soupified_folder.as_deref()),
+            .or(args.slop_to.as_deref())
+            .or(config.slopified_folder.as_deref()),
         &cwd,
     )?;
     let resolved_inputs = args
@@ -40,18 +40,18 @@ pub fn run_desoupify(args: &CliArgs, config: &Config) -> Result<Vec<PathBuf>, So
         .map(|selector| resolve_absolute(selector, &cwd))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let (_soup_file, document) = match resolve_direct_soup_document(&resolved_inputs)? {
-        Some((soup_file, document)) => (soup_file, document),
+    let (_slop_file, document) = match resolve_direct_slop_document(&resolved_inputs)? {
+        Some((slop_file, document)) => (slop_file, document),
         None => {
-            let soup_file = find_matching_soup_file(&resolved_inputs, &soup_dir)?;
-            let document = read_soup_document(&soup_file)?;
-            (soup_file, document)
+            let slop_file = find_matching_slop_file(&resolved_inputs, &slop_dir)?;
+            let document = read_slop_document(&slop_file)?;
+            (slop_file, document)
         }
     };
 
     if !document.meta_blocks.is_empty() {
         eprintln!(
-            "warning: {} #SOUP_META block(s) found in soup; these are reference-only and will be skipped during desoupify",
+            "warning: {} #SLOP_META block(s) found in slop; these are reference-only and will be skipped during deslop",
             document.meta_blocks.len()
         );
     }
@@ -63,7 +63,7 @@ pub fn run_desoupify(args: &CliArgs, config: &Config) -> Result<Vec<PathBuf>, So
         let restored_path = block.original_absolute_path.clone();
 
         if block.read_only {
-            eprintln!("warning: read-only block for {} skipped in desoupify", restored_path.display());
+            eprintln!("warning: read-only block for {} skipped in deslop", restored_path.display());
             continue;
         }
 
@@ -82,7 +82,7 @@ pub fn run_desoupify(args: &CliArgs, config: &Config) -> Result<Vec<PathBuf>, So
         }
 
         if !is_within_allowed_roots(&restored_path, &allowed_roots) {
-            return Err(SoupifyError::WriteOutsideAllowedRoot {
+            return Err(SlopError::WriteOutsideAllowedRoot {
                 path: restored_path.clone(),
                 allowed_roots: allowed_roots.clone(),
             });
@@ -90,7 +90,7 @@ pub fn run_desoupify(args: &CliArgs, config: &Config) -> Result<Vec<PathBuf>, So
 
         if block.base_sha.is_none() && !block.read_only {
             eprintln!(
-                "warning: novel file in returned soup: {} (no base SHA)",
+                "warning: novel file in returned slop: {} (no base SHA)",
                 restored_path.display()
             );
         }
@@ -107,14 +107,14 @@ pub fn run_desoupify(args: &CliArgs, config: &Config) -> Result<Vec<PathBuf>, So
         }
 
         if let Some(parent) = restored_path.parent() {
-            fs::create_dir_all(parent).map_err(|error| SoupifyError::DirectoryCreationFailure {
+            fs::create_dir_all(parent).map_err(|error| SlopError::DirectoryCreationFailure {
                 path: parent.to_path_buf(),
                 source: error,
             })?;
         }
 
         let contents = materialize_block_contents(&restored_path, &block)?;
-        fs::write(&restored_path, contents).map_err(|error| SoupifyError::FileWriteFailure {
+        fs::write(&restored_path, contents).map_err(|error| SlopError::FileWriteFailure {
             path: restored_path.clone(),
             source: error,
         })?;
@@ -197,32 +197,32 @@ fn unified_diff(old: &str, new: &str, path: &Path) -> String {
     if result.trim().is_empty() {
         return String::new();
     }
-    format!("--- {} (current)\n+++ {} (soup)\n{}", path.display(), path.display(), result)
+    format!("--- {} (current)\n+++ {} (slop)\n{}", path.display(), path.display(), result)
 }
 
-fn resolve_direct_soup_document(
+fn resolve_direct_slop_document(
     inputs: &[PathBuf],
-) -> Result<Option<(PathBuf, SoupDocument)>, SoupifyError> {
+) -> Result<Option<(PathBuf, SoupDocument)>, SlopError> {
     let [input] = inputs else {
         return Ok(None);
     };
 
-    if !input.is_file() || !looks_like_soup_file(input) {
+    if !input.is_file() || !looks_like_slop_file(input) {
         return Ok(None);
     }
 
-    read_soup_document(input).map(|document| Some((input.clone(), document)))
+    read_slop_document(input).map(|document| Some((input.clone(), document)))
 }
 
-fn read_soup_document(path: &Path) -> Result<SoupDocument, SoupifyError> {
-    let markdown = fs::read_to_string(path).map_err(|error| SoupifyError::FileReadFailure {
+fn read_slop_document(path: &Path) -> Result<SoupDocument, SlopError> {
+    let markdown = fs::read_to_string(path).map_err(|error| SlopError::FileReadFailure {
         path: path.to_path_buf(),
         source: error,
     })?;
     parse_document(&markdown)
 }
 
-fn looks_like_soup_file(path: &Path) -> bool {
+fn looks_like_slop_file(path: &Path) -> bool {
     if !path.is_file() {
         return false;
     }
@@ -230,22 +230,22 @@ fn looks_like_soup_file(path: &Path) -> bool {
         return false;
     };
     contents.lines().next().map_or(false, |first_line| {
-        first_line.starts_with("#SOUP ")
-            || first_line.starts_with("#SOUP_META ")
-            || first_line.starts_with("#SOUP_AUTO_UNSOUPIFY")
+        first_line.starts_with("#SLOP ")
+            || first_line.starts_with("#SLOP_META ")
+            || first_line.starts_with("#SLOP_AUTO_UNslop")
     })
 }
 
-fn match_soup_file(
+fn match_slop_file(
     selectors: &[PathBuf],
-    soup_dir: &Path,
-) -> Result<SoupMatchResult, SoupifyError> {
-    let candidates = collect_candidate_soup_files(soup_dir)?;
+    slop_dir: &Path,
+) -> Result<SoupMatchResult, SlopError> {
+    let candidates = collect_candidate_slop_files(slop_dir)?;
     let mut matches = Vec::new();
 
     for candidate in candidates {
         let markdown =
-            fs::read_to_string(&candidate).map_err(|error| SoupifyError::FileReadFailure {
+            fs::read_to_string(&candidate).map_err(|error| SlopError::FileReadFailure {
                 path: candidate.clone(),
                 source: error,
             })?;
@@ -262,13 +262,13 @@ fn match_soup_file(
     })
 }
 
-fn collect_candidate_soup_files(soup_dir: &Path) -> Result<Vec<PathBuf>, SoupifyError> {
-    let directory_entries = match fs::read_dir(soup_dir) {
+fn collect_candidate_slop_files(slop_dir: &Path) -> Result<Vec<PathBuf>, SlopError> {
+    let directory_entries = match fs::read_dir(slop_dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
-            return Err(SoupifyError::FileReadFailure {
-                path: soup_dir.to_path_buf(),
+            return Err(SlopError::FileReadFailure {
+                path: slop_dir.to_path_buf(),
                 source: error,
             });
         }
@@ -276,8 +276,8 @@ fn collect_candidate_soup_files(soup_dir: &Path) -> Result<Vec<PathBuf>, Soupify
 
     let mut files = Vec::new();
     for entry in directory_entries {
-        let entry = entry.map_err(|error| SoupifyError::FileReadFailure {
-            path: soup_dir.to_path_buf(),
+        let entry = entry.map_err(|error| SlopError::FileReadFailure {
+            path: slop_dir.to_path_buf(),
             source: error,
         })?;
         let path = entry.path();
@@ -377,7 +377,7 @@ fn reconstruct_contents(lines: &[String], trailing_newline: bool) -> String {
     contents
 }
 
-fn materialize_block_contents(path: &Path, block: &SoupBlock) -> Result<String, SoupifyError> {
+fn materialize_block_contents(path: &Path, block: &SoupBlock) -> Result<String, SlopError> {
     match &block.partial_range {
         Some(range) => apply_partial_block(path, range, &block.content_lines, block.trailing_newline),
         None => Ok(reconstruct_contents(&block.content_lines, block.trailing_newline)),
@@ -389,16 +389,16 @@ fn apply_partial_block(
     range: &SoupPartialRange,
     replacement_lines: &[String],
     trailing_newline: bool,
-) -> Result<String, SoupifyError> {
-    let existing = fs::read_to_string(path).map_err(|error| SoupifyError::FileReadFailure {
+) -> Result<String, SlopError> {
+    let existing = fs::read_to_string(path).map_err(|error| SlopError::FileReadFailure {
         path: path.to_path_buf(),
         source: error,
     })?;
     let existing_lines = split_existing_lines(&existing);
 
     if range.end_line > existing_lines.len() {
-        return Err(SoupifyError::SoupParseFailure(format!(
-            "partial soup range {}-{} exceeds existing file length {} for {}",
+        return Err(SlopError::SoupParseFailure(format!(
+            "partial slop range {}-{} exceeds existing file length {} for {}",
             range.start_line,
             range.end_line,
             existing_lines.len(),
@@ -408,7 +408,7 @@ fn apply_partial_block(
 
     if partial_block_already_applied(&existing_lines, range, replacement_lines) {
         eprintln!(
-            "note: partial soup block for {} lines {}-{} already applied; skipping (idempotent)",
+            "note: partial slop block for {} lines {}-{} already applied; skipping (idempotent)",
             path.display(),
             range.start_line,
             range.end_line
@@ -465,7 +465,7 @@ mod tests {
     use crate::models::{SoupBlock, SoupDocument, SoupPartialRange};
 
     use super::{
-        apply_partial_block, document_matches, find_matching_soup_file, resolve_direct_soup_document,
+        apply_partial_block, document_matches, find_matching_slop_file, resolve_direct_slop_document,
     };
 
     fn document(paths: &[&str]) -> SoupDocument {
@@ -487,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn matches_a_soup_file_for_file_selectors() {
+    fn matches_a_slop_file_for_file_selectors() {
         let doc = document(&["/tmp/one.txt", "/tmp/two.txt"]);
         assert!(document_matches(
             &[PathBuf::from("/tmp/one.txt"), PathBuf::from("/tmp/two.txt")],
@@ -496,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn matches_a_soup_file_for_directory_selectors() {
+    fn matches_a_slop_file_for_directory_selectors() {
         let temp = tempdir().expect("tempdir should exist");
         let directory = temp.path().join("nested");
         fs::create_dir_all(&directory).expect("directory should be created");
@@ -509,50 +509,50 @@ mod tests {
     #[test]
     fn rejects_zero_matches() {
         let temp = tempdir().expect("tempdir should exist");
-        let error = find_matching_soup_file(&[PathBuf::from("/tmp/missing.txt")], temp.path())
+        let error = find_matching_slop_file(&[PathBuf::from("/tmp/missing.txt")], temp.path())
             .expect_err("expected no match failure");
-        assert!(error.to_string().contains("no matching soup file"));
+        assert!(error.to_string().contains("no matching slop file"));
     }
 
     #[test]
     fn rejects_multiple_matches() {
         let temp = tempdir().expect("tempdir should exist");
         let selector = PathBuf::from("/tmp/file.txt");
-        let header = "#SOUP \"/tmp/file.txt\" #SOUPED_LINES 1 #SOUP_TRAILING_NEWLINE 0\nhello";
-        fs::write(temp.path().join("one.md"), header).expect("soup file should be written");
-        fs::write(temp.path().join("two.md"), header).expect("soup file should be written");
+        let header = "#SLOP \"/tmp/file.txt\" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 0\nhello";
+        fs::write(temp.path().join("one.md"), header).expect("slop file should be written");
+        fs::write(temp.path().join("two.md"), header).expect("slop file should be written");
 
-        let error = find_matching_soup_file(&[selector], temp.path())
+        let error = find_matching_slop_file(&[selector], temp.path())
             .expect_err("expected ambiguous match failure");
-        assert!(error.to_string().contains("multiple soup files matched"));
+        assert!(error.to_string().contains("multiple slop files matched"));
     }
 
     #[test]
-    fn accepts_a_direct_soup_document_path() {
+    fn accepts_a_direct_slop_document_path() {
         let temp = tempdir().expect("tempdir should exist");
-        let soup_file = temp.path().join("archive.soup");
+        let slop_file = temp.path().join("archive.slop");
         fs::write(
-            &soup_file,
-            "#SOUP \"/tmp/file.txt\" #SOUPED_LINES 1 #SOUP_TRAILING_NEWLINE 0\nhello",
+            &slop_file,
+            "#SLOP \"/tmp/file.txt\" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 0\nhello",
         )
-        .expect("soup file should be written");
+        .expect("slop file should be written");
 
-        let direct = resolve_direct_soup_document(std::slice::from_ref(&soup_file))
-            .expect("direct soup detection should succeed")
-            .expect("direct soup document should be detected");
+        let direct = resolve_direct_slop_document(std::slice::from_ref(&slop_file))
+            .expect("direct slop detection should succeed")
+            .expect("direct slop document should be detected");
 
-        assert_eq!(direct.0, soup_file);
+        assert_eq!(direct.0, slop_file);
         assert_eq!(direct.1.blocks.len(), 1);
     }
 
     #[test]
-    fn ignores_non_soup_file_when_resolving_direct_document() {
+    fn ignores_non_slop_file_when_resolving_direct_document() {
         let temp = tempdir().expect("tempdir should exist");
         let source = temp.path().join("file.txt");
         fs::write(&source, "plain text").expect("source file should be written");
 
-        let direct = resolve_direct_soup_document(std::slice::from_ref(&source))
-            .expect("non-soup file should not error");
+        let direct = resolve_direct_slop_document(std::slice::from_ref(&source))
+            .expect("non-slop file should not error");
 
         assert!(direct.is_none());
     }
@@ -596,22 +596,22 @@ mod tests {
 
         assert!(error
             .to_string()
-            .contains("partial soup range 2-4 exceeds existing file length 2"));
+            .contains("partial slop range 2-4 exceeds existing file length 2"));
     }
 
     #[test]
-    fn desoupify_skips_meta_blocks() {
+    fn deslop_skips_meta_blocks() {
         let temp = tempdir().expect("tempdir should exist");
-        let soup_file = temp.path().join("with_meta.md");
+        let slop_file = temp.path().join("with_meta.md");
         fs::write(
-            &soup_file,
-            "#SOUP_META \"repo-graph\" #SOUP_META_KIND codegraph #SOUP_META_FORMAT repomap #SOUP_META_LINES 2 #SOUP_META_READONLY true\ngraph_line1\ngraph_line2\n#SOUP \"/tmp/file.txt\" #SOUPED_LINES 1 #SOUP_TRAILING_NEWLINE 0\nhello",
+            &slop_file,
+            "#SLOP_META \"repo-graph\" #SLOP_META_KIND codegraph #SLOP_META_FORMAT repomap #SLOP_META_LINES 2 #SLOP_META_READONLY true\ngraph_line1\ngraph_line2\n#SLOP \"/tmp/file.txt\" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 0\nhello",
         )
-        .expect("soup file should be written");
+        .expect("slop file should be written");
 
-        let direct = resolve_direct_soup_document(std::slice::from_ref(&soup_file))
-            .expect("direct soup detection should succeed")
-            .expect("direct soup document should be detected");
+        let direct = resolve_direct_slop_document(std::slice::from_ref(&slop_file))
+            .expect("direct slop detection should succeed")
+            .expect("direct slop document should be detected");
 
         assert_eq!(direct.1.meta_blocks.len(), 1);
         assert_eq!(direct.1.blocks.len(), 1);
@@ -647,7 +647,7 @@ mod tests {
 
         assert_eq!(
             second, first,
-            "re-running desoupify on an already-applied partial block must leave the file unchanged"
+            "re-running deslop on an already-applied partial block must leave the file unchanged"
         );
     }
 
@@ -673,7 +673,7 @@ mod tests {
 
         assert_eq!(
             second, first,
-            "re-running desoupify after a line-removing partial block must not corrupt the file"
+            "re-running deslop after a line-removing partial block must not corrupt the file"
         );
     }
 

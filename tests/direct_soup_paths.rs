@@ -5,24 +5,24 @@ use predicates::str::contains;
 use tempfile::tempdir;
 
 fn cargo_bin() -> Command {
-    Command::cargo_bin("soupify").expect("binary should build")
+    Command::cargo_bin("slop").expect("binary should build")
 }
 
 #[test]
-fn desoupify_accepts_a_direct_soup_file_path() {
+fn deslop_accepts_a_direct_slop_file_path() {
     let temp = tempdir().expect("tempdir should exist");
     let restored = temp.path().join("nested/file.txt");
-    let soup_file = temp.path().join("archive.soup");
+    let slop_file = temp.path().join("archive.slop");
     fs::write(
-        &soup_file,
+        &slop_file,
         format!(
-            "#SOUP \"{}\" #SOUPED_LINES 2 #SOUP_TRAILING_NEWLINE 1\nhello\nworld",
+            "#SLOP \"{}\" #SLOPED_LINES 2 #SLOP_TRAILING_NEWLINE 1\nhello\nworld",
             restored.display()
         ),
     )
-    .expect("soup file should be written");
+    .expect("slop file should be written");
 
-    cargo_bin().args(["-d"]).arg(&soup_file).assert().success();
+    cargo_bin().args(["-d"]).arg(&slop_file).assert().success();
 
     assert_eq!(
         fs::read_to_string(&restored).expect("restored file should exist"),
@@ -31,34 +31,34 @@ fn desoupify_accepts_a_direct_soup_file_path() {
 }
 
 #[test]
-fn direct_soup_path_reports_parse_errors_from_that_file() {
+fn direct_slop_path_reports_parse_errors_from_that_file() {
     let temp = tempdir().expect("tempdir should exist");
-    let soup_file = temp.path().join("broken.soup");
-    fs::write(&soup_file, "#SOUP \"/tmp/file.txt\"").expect("soup file should be written");
+    let slop_file = temp.path().join("broken.slop");
+    fs::write(&slop_file, "#SLOP \"/tmp/file.txt\"").expect("slop file should be written");
 
     cargo_bin()
         .args(["-d"])
-        .arg(&soup_file)
+        .arg(&slop_file)
         .assert()
         .failure()
-        .stderr(contains("malformed soup header"));
+        .stderr(contains("malformed slop header"));
 }
 
 #[test]
-fn desoupify_accepts_a_txt_file_with_soup_content() {
+fn deslop_accepts_a_txt_file_with_slop_content() {
     let temp = tempdir().expect("tempdir should exist");
     let restored = temp.path().join("out/hello.txt");
-    let soup_file = temp.path().join("notes.txt");
+    let slop_file = temp.path().join("notes.txt");
     fs::write(
-        &soup_file,
+        &slop_file,
         format!(
-            "#SOUP \"{}\" #SOUPED_LINES 1 #SOUP_TRAILING_NEWLINE 1\nhello",
+            "#SLOP \"{}\" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 1\nhello",
             restored.display()
         ),
     )
-    .expect("soup file should be written");
+    .expect("slop file should be written");
 
-    cargo_bin().args(["-d"]).arg(&soup_file).assert().success();
+    cargo_bin().args(["-d"]).arg(&slop_file).assert().success();
 
     assert_eq!(
         fs::read_to_string(&restored).expect("restored file should exist"),

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::error::SoupifyError;
+use crate::error::SlopError;
 use crate::models::SourceFile;
 
 #[derive(Debug, Clone)]
@@ -121,7 +121,7 @@ fn mask_value(value: &str) -> String {
 }
 
 fn is_suppressed(line: &str) -> bool {
-    line.contains("# soupify:allow-secret")
+    line.contains("# slop:allow-secret")
 }
 
 pub fn scan_files(files: &[SourceFile]) -> Vec<Finding> {
@@ -209,7 +209,7 @@ pub fn apply_redaction(files: &mut [SourceFile], findings: &[Finding]) {
             if trailing {
                 redacted.push('\n');
             }
-            let (count, trailing) = crate::soup_format::analyze_contents(&redacted);
+            let (count, trailing) = crate::slop_format::analyze_contents(&redacted);
             file.contents = redacted;
             file.logical_line_count = count;
             file.trailing_newline = trailing;
@@ -224,7 +224,7 @@ pub fn enforce(
     config: &crate::config::Config,
     allow_secrets: bool,
     redact: bool,
-) -> Result<Vec<SourceFile>, SoupifyError> {
+) -> Result<Vec<SourceFile>, SlopError> {
     let mode = config.secret_scan.trim().to_lowercase();
     let disabled = mode == "off" || mode == "disabled" || mode == "false" || mode == "none";
     let block_mode = mode == "block" || mode == "strict";
@@ -266,7 +266,7 @@ pub fn enforce(
     }
 
     if has_block && block_mode {
-        return Err(SoupifyError::SecretsDetected {
+        return Err(SlopError::SecretsDetected {
             findings_summary: summary,
         });
     }

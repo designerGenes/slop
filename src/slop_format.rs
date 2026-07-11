@@ -3,13 +3,13 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-use crate::error::SoupifyError;
+use crate::error::SlopError;
 use crate::models::{SoupBlock, SoupDocument, SoupMetaBlock, SoupPartialRange, SourceFile};
 
 pub fn serialize_document(
     meta_blocks: &[SoupMetaBlock],
     files: &[SourceFile],
-) -> Result<String, SoupifyError> {
+) -> Result<String, SlopError> {
     let mut lines = Vec::new();
 
     for meta in meta_blocks {
@@ -29,7 +29,7 @@ pub fn serialize_document(
     Ok(lines.join("\n"))
 }
 
-pub fn parse_document(markdown: &str) -> Result<SoupDocument, SoupifyError> {
+pub fn parse_document(markdown: &str) -> Result<SoupDocument, SlopError> {
     if markdown.is_empty() {
         return Ok(SoupDocument {
             meta_blocks: Vec::new(),
@@ -49,12 +49,12 @@ pub fn parse_document(markdown: &str) -> Result<SoupDocument, SoupifyError> {
             break;
         }
 
-        if header.starts_with("#SOUP_AUTO_UNSOUPIFY") {
+        if header.starts_with("#SLOP_AUTO_UNslop") {
             index += 1;
             continue;
         }
 
-        if header.starts_with("#SOUP_META ") {
+        if header.starts_with("#SLOP_META ") {
             let (meta_block, consumed) = parse_meta_block(header, index + 1, &lines)?;
             index += 1 + consumed;
             meta_blocks.push(meta_block);
@@ -66,7 +66,7 @@ pub fn parse_document(markdown: &str) -> Result<SoupDocument, SoupifyError> {
         index += 1;
 
         if lines.len().saturating_sub(index) < logical_line_count {
-            return Err(SoupifyError::SoupParseFailure(format!(
+            return Err(SlopError::SoupParseFailure(format!(
                 "declared line count {} exceeds available lines for {}",
                 logical_line_count,
                 path.display()
@@ -95,7 +95,7 @@ pub fn parse_document(markdown: &str) -> Result<SoupDocument, SoupifyError> {
 
 fn serialize_meta_header(meta: &SoupMetaBlock) -> String {
     format!(
-        "#SOUP_META \"{}\" #SOUP_META_KIND {} #SOUP_META_FORMAT {} #SOUP_META_LINES {} #SOUP_META_READONLY {}",
+        "#SLOP_META \"{}\" #SLOP_META_KIND {} #SLOP_META_FORMAT {} #SLOP_META_LINES {} #SLOP_META_READONLY {}",
         meta.label, meta.kind, meta.format, meta.line_count, meta.readonly
     )
 }
@@ -104,10 +104,10 @@ fn parse_meta_block(
     header: &str,
     line_number: usize,
     lines: &[&str],
-) -> Result<(SoupMetaBlock, usize), SoupifyError> {
+) -> Result<(SoupMetaBlock, usize), SlopError> {
     let captures = meta_header_regex().captures(header).ok_or_else(|| {
-        SoupifyError::SoupParseFailure(format!(
-            "malformed soup meta header on line {line_number}: {header}"
+        SlopError::SoupParseFailure(format!(
+            "malformed slop meta header on line {line_number}: {header}"
         ))
     })?;
 
@@ -120,7 +120,7 @@ fn parse_meta_block(
         .as_str()
         .parse::<usize>()
         .map_err(|error| {
-            SoupifyError::SoupParseFailure(format!(
+            SlopError::SoupParseFailure(format!(
                 "invalid meta line count on line {line_number}: {error}"
             ))
         })?;
@@ -128,7 +128,7 @@ fn parse_meta_block(
         "true" => true,
         "false" => false,
         other => {
-            return Err(SoupifyError::SoupParseFailure(format!(
+            return Err(SlopError::SoupParseFailure(format!(
                 "invalid readonly marker on line {line_number}: {other}"
             )));
         }
@@ -136,7 +136,7 @@ fn parse_meta_block(
 
     let start = line_number;
     if lines.len().saturating_sub(start) < line_count {
-        return Err(SoupifyError::SoupParseFailure(format!(
+        return Err(SlopError::SoupParseFailure(format!(
             "declared meta line count {line_count} exceeds available lines on line {line_number}"
         )));
     }
@@ -159,22 +159,22 @@ fn parse_meta_block(
     ))
 }
 
-fn serialize_header(file: &SourceFile) -> Result<String, SoupifyError> {
+fn serialize_header(file: &SourceFile) -> Result<String, SlopError> {
     let path = serde_json::to_string(&file.original_absolute_path.to_string_lossy().to_string())
-        .map_err(|error| SoupifyError::SoupParseFailure(error.to_string()))?;
+        .map_err(|error| SlopError::SoupParseFailure(error.to_string()))?;
 
     let mut header = format!(
-        "#SOUP {path} #SOUPED_LINES {} #SOUP_TRAILING_NEWLINE {}",
+        "#SLOP {path} #SLOPED_LINES {} #SLOP_TRAILING_NEWLINE {}",
         file.logical_line_count,
         usize::from(file.trailing_newline)
     );
 
     if let Some(ref sha) = file.base_sha {
-        header.push_str(&format!(" #SOUP_BASE_SHA {sha}"));
+        header.push_str(&format!(" #SLOP_BASE_SHA {sha}"));
     }
 
     if file.read_only {
-        header.push_str(" #SOUP_READONLY true");
+        header.push_str(" #SLOP_READONLY true");
     }
 
     Ok(header)
@@ -210,26 +210,26 @@ pub fn analyze_contents(contents: &str) -> (usize, bool) {
 fn parse_header(
     line: &str,
     line_number: usize,
-) -> Result<(PathBuf, Option<SoupPartialRange>, usize, bool, Option<String>, bool), SoupifyError> {
+) -> Result<(PathBuf, Option<SoupPartialRange>, usize, bool, Option<String>, bool), SlopError> {
     let path_captures = header_path_regex().captures(line).ok_or_else(|| {
-        SoupifyError::SoupParseFailure(format!(
-            "malformed soup header on line {line_number}: {line}"
+        SlopError::SoupParseFailure(format!(
+            "malformed slop header on line {line_number}: {line}"
         ))
     })?;
 
-    let has_line_count_metadata = line.contains(" #SOUPED_LINES ");
-    let has_trailing_newline_metadata = line.contains(" #SOUP_TRAILING_NEWLINE ");
+    let has_line_count_metadata = line.contains(" #SLOPED_LINES ");
+    let has_trailing_newline_metadata = line.contains(" #SLOP_TRAILING_NEWLINE ");
     if (has_line_count_metadata || has_trailing_newline_metadata)
         && !(has_line_count_metadata && has_trailing_newline_metadata)
     {
-        return Err(SoupifyError::SoupParseFailure(format!(
-            "missing soup metadata on line {line_number}: {line}"
+        return Err(SlopError::SoupParseFailure(format!(
+            "missing slop metadata on line {line_number}: {line}"
         )));
     }
 
     let captures = header_regex().captures(line).ok_or_else(|| {
-        SoupifyError::SoupParseFailure(format!(
-            "malformed soup header on line {line_number}: {line}"
+        SlopError::SoupParseFailure(format!(
+            "malformed slop header on line {line_number}: {line}"
         ))
     })?;
 
@@ -237,32 +237,32 @@ fn parse_header(
         .get(1)
         .map(|capture| capture.as_str())
         .ok_or_else(|| {
-            SoupifyError::SoupParseFailure(format!(
-                "soup header missing path metadata on line {line_number}"
+            SlopError::SoupParseFailure(format!(
+                "slop header missing path metadata on line {line_number}"
             ))
         })?;
     let path: String = serde_json::from_str(path_json).map_err(|error| {
-        SoupifyError::SoupParseFailure(format!(
-            "invalid escaped soup path on line {line_number}: {error}"
+        SlopError::SoupParseFailure(format!(
+            "invalid escaped slop path on line {line_number}: {error}"
         ))
     })?;
 
     let partial_range = match (captures.get(2), captures.get(3)) {
         (Some(start), Some(end)) => {
             let start_line = start.as_str().parse::<usize>().map_err(|error| {
-                SoupifyError::SoupParseFailure(format!(
-                    "invalid partial soup start line on line {line_number}: {error}"
+                SlopError::SoupParseFailure(format!(
+                    "invalid partial slop start line on line {line_number}: {error}"
                 ))
             })?;
             let end_line = end.as_str().parse::<usize>().map_err(|error| {
-                SoupifyError::SoupParseFailure(format!(
-                    "invalid partial soup end line on line {line_number}: {error}"
+                SlopError::SoupParseFailure(format!(
+                    "invalid partial slop end line on line {line_number}: {error}"
                 ))
             })?;
 
             if start_line == 0 || end_line == 0 || start_line > end_line {
-                return Err(SoupifyError::SoupParseFailure(format!(
-                    "invalid partial soup range on line {line_number}: {line}"
+                return Err(SlopError::SoupParseFailure(format!(
+                    "invalid partial slop range on line {line_number}: {line}"
                 )));
             }
 
@@ -273,8 +273,8 @@ fn parse_header(
         }
         (None, None) => None,
         _ => {
-            return Err(SoupifyError::SoupParseFailure(format!(
-                "malformed soup header on line {line_number}: {line}"
+            return Err(SlopError::SoupParseFailure(format!(
+                "malformed slop header on line {line_number}: {line}"
             )));
         }
     };
@@ -282,15 +282,15 @@ fn parse_header(
     let logical_line_count = captures
         .get(4)
         .ok_or_else(|| {
-            SoupifyError::SoupParseFailure(format!(
-                "soup header missing line count on line {line_number}"
+            SlopError::SoupParseFailure(format!(
+                "slop header missing line count on line {line_number}"
             ))
         })?
         .as_str()
         .parse::<usize>()
         .map_err(|error| {
-            SoupifyError::SoupParseFailure(format!(
-                "invalid soup line count on line {line_number}: {error}"
+            SlopError::SoupParseFailure(format!(
+                "invalid slop line count on line {line_number}: {error}"
             ))
         })?;
 
@@ -298,13 +298,13 @@ fn parse_header(
         Some("0") | Some("false") => false,
         Some("1") | Some("true") => true,
         Some(other) => {
-            return Err(SoupifyError::SoupParseFailure(format!(
+            return Err(SlopError::SoupParseFailure(format!(
                 "invalid trailing newline marker on line {line_number}: {other}"
             )));
         }
         None => {
-            return Err(SoupifyError::SoupParseFailure(format!(
-                "soup header missing trailing newline metadata on line {line_number}"
+            return Err(SlopError::SoupParseFailure(format!(
+                "slop header missing trailing newline metadata on line {line_number}"
             )));
         }
     };
@@ -329,7 +329,7 @@ fn parse_header(
 fn header_path_regex() -> &'static Regex {
     static HEADER_PATH_REGEX: OnceLock<Regex> = OnceLock::new();
     HEADER_PATH_REGEX.get_or_init(|| {
-        Regex::new(r#"^#SOUP ("(?:\\.|[^"\\])*")(?: .*)?$"#)
+        Regex::new(r#"^#SLOP ("(?:\\.|[^"\\])*")(?: .*)?$"#)
             .expect("header path regex should compile")
     })
 }
@@ -338,7 +338,7 @@ fn header_regex() -> &'static Regex {
     static HEADER_REGEX: OnceLock<Regex> = OnceLock::new();
     HEADER_REGEX.get_or_init(|| {
         Regex::new(
-            r#"^#SOUP ("(?:\\.|[^"\\])*")(?: #SOUP_PARTIAL_LINES ([0-9]+)-([0-9]+))? #SOUPED_LINES ([0-9]+) #SOUP_TRAILING_NEWLINE (0|1|true|false)(?: #SOUP_BASE_SHA ([0-9a-f]{64}))?(?: #SOUP_READONLY (true|false))?$"#,
+            r#"^#SLOP ("(?:\\.|[^"\\])*")(?: #SLOP_PARTIAL_LINES ([0-9]+)-([0-9]+))? #SLOPED_LINES ([0-9]+) #SLOP_TRAILING_NEWLINE (0|1|true|false)(?: #SLOP_BASE_SHA ([0-9a-f]{64}))?(?: #SLOP_READONLY (true|false))?$"#,
         )
         .expect("header regex should compile")
     })
@@ -348,7 +348,7 @@ fn meta_header_regex() -> &'static Regex {
     static META_HEADER_REGEX: OnceLock<Regex> = OnceLock::new();
     META_HEADER_REGEX.get_or_init(|| {
         Regex::new(
-            r#"^#SOUP_META "(.+?)" #SOUP_META_KIND (\S+) #SOUP_META_FORMAT (\S+) #SOUP_META_LINES (\d+) #SOUP_META_READONLY (true|false)$"#,
+            r#"^#SLOP_META "(.+?)" #SLOP_META_KIND (\S+) #SLOP_META_FORMAT (\S+) #SLOP_META_LINES (\d+) #SLOP_META_READONLY (true|false)$"#,
         )
         .expect("meta header regex should compile")
     })
@@ -386,7 +386,7 @@ mod tests {
             .expect("document should serialize");
         assert_eq!(
             document,
-            "#SOUP \"/tmp/file.txt\" #SOUPED_LINES 1 #SOUP_TRAILING_NEWLINE 0\nhello"
+            "#SLOP \"/tmp/file.txt\" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 0\nhello"
         );
     }
 
@@ -403,14 +403,14 @@ mod tests {
 
         assert_eq!(
             document,
-            "#SOUP \"/tmp/one.txt\" #SOUPED_LINES 1 #SOUP_TRAILING_NEWLINE 1\none\n#SOUP \"/tmp/two.txt\" #SOUPED_LINES 1 #SOUP_TRAILING_NEWLINE 0\ntwo"
+            "#SLOP \"/tmp/one.txt\" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 1\none\n#SLOP \"/tmp/two.txt\" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 0\ntwo"
         );
     }
 
     #[test]
     fn parses_valid_headers() {
         let document = parse_document(
-            "#SOUP \"/tmp/file.txt\" #SOUPED_LINES 2 #SOUP_TRAILING_NEWLINE 0\na\nb",
+            "#SLOP \"/tmp/file.txt\" #SLOPED_LINES 2 #SLOP_TRAILING_NEWLINE 0\na\nb",
         )
         .expect("document should parse");
 
@@ -427,7 +427,7 @@ mod tests {
     #[test]
     fn parses_partial_headers() {
         let document = parse_document(
-            "#SOUP \"/tmp/file.txt\" #SOUP_PARTIAL_LINES 2-3 #SOUPED_LINES 2 #SOUP_TRAILING_NEWLINE 1\na\nb",
+            "#SLOP \"/tmp/file.txt\" #SLOP_PARTIAL_LINES 2-3 #SLOPED_LINES 2 #SLOP_TRAILING_NEWLINE 1\na\nb",
         )
         .expect("document should parse");
 
@@ -444,11 +444,11 @@ mod tests {
     #[test]
     fn parses_boolean_trailing_newline_markers() {
         let with_newline = parse_document(
-            "#SOUP \"/tmp/true.txt\" #SOUPED_LINES 1 #SOUP_TRAILING_NEWLINE true\na",
+            "#SLOP \"/tmp/true.txt\" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE true\na",
         )
         .expect("document should parse");
         let without_newline = parse_document(
-            "#SOUP \"/tmp/false.txt\" #SOUPED_LINES 1 #SOUP_TRAILING_NEWLINE false\na",
+            "#SLOP \"/tmp/false.txt\" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE false\na",
         )
         .expect("document should parse");
 
@@ -459,30 +459,30 @@ mod tests {
     #[test]
     fn rejects_malformed_headers() {
         let error =
-            parse_document("#SOUP \"/tmp/file.txt\"\na").expect_err("malformed header should fail");
-        assert!(error.to_string().contains("malformed soup header"));
+            parse_document("#SLOP \"/tmp/file.txt\"\na").expect_err("malformed header should fail");
+        assert!(error.to_string().contains("malformed slop header"));
     }
 
     #[test]
     fn rejects_headers_missing_required_metadata() {
-        let error = parse_document("#SOUP \"/tmp/file.txt\" #SOUPED_LINES 1\na")
+        let error = parse_document("#SLOP \"/tmp/file.txt\" #SLOPED_LINES 1\na")
             .expect_err("missing metadata should fail");
-        assert!(error.to_string().contains("missing soup metadata"));
+        assert!(error.to_string().contains("missing slop metadata"));
     }
 
     #[test]
     fn rejects_invalid_partial_ranges() {
         let error = parse_document(
-            "#SOUP \"/tmp/file.txt\" #SOUP_PARTIAL_LINES 3-2 #SOUPED_LINES 1 #SOUP_TRAILING_NEWLINE 0\na",
+            "#SLOP \"/tmp/file.txt\" #SLOP_PARTIAL_LINES 3-2 #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 0\na",
         )
         .expect_err("invalid partial range should fail");
-        assert!(error.to_string().contains("invalid partial soup range"));
+        assert!(error.to_string().contains("invalid partial slop range"));
     }
 
     #[test]
     fn preserves_empty_files() {
         let document =
-            parse_document("#SOUP \"/tmp/empty.txt\" #SOUPED_LINES 0 #SOUP_TRAILING_NEWLINE 0")
+            parse_document("#SLOP \"/tmp/empty.txt\" #SLOPED_LINES 0 #SLOP_TRAILING_NEWLINE 0")
                 .expect("document should parse");
 
         assert!(document.blocks[0].content_lines.is_empty());
@@ -518,7 +518,7 @@ mod tests {
 
     #[test]
     fn accepts_a_trailing_newline_after_the_last_block() {
-        let document = parse_document("#SOUP \"/tmp/file.txt\" #SOUPED_LINES 1 #SOUP_TRAILING_NEWLINE true\nhello\n")
+        let document = parse_document("#SLOP \"/tmp/file.txt\" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE true\nhello\n")
             .expect("document should parse");
 
         assert_eq!(document.blocks.len(), 1);
@@ -540,13 +540,13 @@ mod tests {
         let document =
             serialize_document(&[meta], &files).expect("document should serialize");
 
-        assert!(document.starts_with("#SOUP_META \"repo-graph\""));
-        assert!(document.contains("line1\nline2\n#SOUP"));
+        assert!(document.starts_with("#SLOP_META \"repo-graph\""));
+        assert!(document.contains("line1\nline2\n#SLOP"));
     }
 
     #[test]
     fn parses_meta_block_correctly() {
-        let input = "#SOUP_META \"repo-graph\" #SOUP_META_KIND codegraph #SOUP_META_FORMAT repomap #SOUP_META_LINES 3 #SOUP_META_READONLY true\nline1\nline2\nline3\n#SOUP \"/tmp/file.txt\" #SOUPED_LINES 1 #SOUP_TRAILING_NEWLINE 0\nhello";
+        let input = "#SLOP_META \"repo-graph\" #SLOP_META_KIND codegraph #SLOP_META_FORMAT repomap #SLOP_META_LINES 3 #SLOP_META_READONLY true\nline1\nline2\nline3\n#SLOP \"/tmp/file.txt\" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 0\nhello";
         let document = parse_document(input).expect("document should parse");
 
         assert_eq!(document.meta_blocks.len(), 1);
@@ -590,7 +590,7 @@ mod tests {
 
     #[test]
     fn parses_document_with_no_meta_blocks() {
-        let input = "#SOUP \"/tmp/file.txt\" #SOUPED_LINES 1 #SOUP_TRAILING_NEWLINE 0\nhello";
+        let input = "#SLOP \"/tmp/file.txt\" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 0\nhello";
         let document = parse_document(input).expect("document should parse");
         assert!(document.meta_blocks.is_empty());
         assert_eq!(document.blocks.len(), 1);
@@ -598,7 +598,7 @@ mod tests {
 
     #[test]
     fn rejects_meta_block_with_insufficient_content_lines() {
-        let input = "#SOUP_META \"test\" #SOUP_META_KIND codegraph #SOUP_META_FORMAT repomap #SOUP_META_LINES 5 #SOUP_META_READONLY true\nonly_one";
+        let input = "#SLOP_META \"test\" #SLOP_META_KIND codegraph #SLOP_META_FORMAT repomap #SLOP_META_LINES 5 #SLOP_META_READONLY true\nonly_one";
         let error = parse_document(input).expect_err("should fail");
         assert!(error.to_string().contains("exceeds available lines"));
     }

@@ -2,20 +2,20 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-use crate::error::SoupifyError;
+use crate::error::SlopError;
 use crate::models::CliArgs;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "soupify",
+    name = "slop",
     version,
-    about = "Combine files into a markdown soup"
+    about = "Combine files into a markdown slop"
 )]
 struct RawCliArgs {
     #[arg(short = 'o', long = "output")]
     output_dir: Option<PathBuf>,
-    #[arg(short = 'd', long = "desoupify")]
-    desoupify: bool,
+    #[arg(short = 'd', long = "deslop")]
+    deslop: bool,
     #[arg(short = 's', long = "show")]
     show_output_dir: bool,
     #[arg(short = 'r', long = "recursive")]
@@ -26,8 +26,8 @@ struct RawCliArgs {
     respect_gitignore: bool,
     #[arg(short = 'g', long = "include-graph")]
     include_graph: bool,
-    #[arg(long = "soupify-to")]
-    soupify_to: Option<PathBuf>,
+    #[arg(long = "slop-to")]
+    slop_to: Option<PathBuf>,
     #[arg(long = "graph-format")]
     graph_format: Option<String>,
     #[arg(long = "graph-map-tokens")]
@@ -44,8 +44,8 @@ struct RawCliArgs {
     task: Option<String>,
     #[arg(long = "top-k", value_name = "N")]
     top_k: Option<usize>,
-    #[arg(long = "max-soup-bytes", value_name = "N")]
-    max_soup_bytes: Option<usize>,
+    #[arg(long = "max-slop-bytes", value_name = "N")]
+    max_slop_bytes: Option<usize>,
     #[arg(long = "reindex")]
     reindex: bool,
     #[arg(long = "explain-selection")]
@@ -64,32 +64,32 @@ struct RawCliArgs {
     inputs: Vec<PathBuf>,
 }
 
-pub fn parse_cli_args() -> Result<CliArgs, SoupifyError> {
+pub fn parse_cli_args() -> Result<CliArgs, SlopError> {
     parse_cli_args_from(std::env::args_os())
 }
 
-pub fn parse_cli_args_from<I, T>(args: I) -> Result<CliArgs, SoupifyError>
+pub fn parse_cli_args_from<I, T>(args: I) -> Result<CliArgs, SlopError>
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
     let parsed = RawCliArgs::try_parse_from(args)
-        .map_err(|error| SoupifyError::InvalidCliUsage(error.to_string()))?;
+        .map_err(|error| SlopError::InvalidCliUsage(error.to_string()))?;
 
     if parsed.inputs.is_empty() {
-        return Err(SoupifyError::InvalidCliUsage(
+        return Err(SlopError::InvalidCliUsage(
             "at least one input path is required".to_string(),
         ));
     }
 
-    if parsed.desoupify && parsed.show_output_dir {
-        return Err(SoupifyError::InvalidCliUsage(
-            "-d/--desoupify cannot be combined with -s/--show".to_string(),
+    if parsed.deslop && parsed.show_output_dir {
+        return Err(SlopError::InvalidCliUsage(
+            "-d/--deslop cannot be combined with -s/--show".to_string(),
         ));
     }
 
     Ok(CliArgs {
-        desoupify: parsed.desoupify,
+        deslop: parsed.deslop,
         show_output_dir: parsed.show_output_dir,
         output_dir: parsed.output_dir,
         recursive: parsed.recursive,
@@ -97,7 +97,7 @@ where
         exclude: parsed.exclude,
         respect_gitignore: parsed.respect_gitignore,
         include_graph: parsed.include_graph,
-        soupify_to: parsed.soupify_to,
+        slop_to: parsed.slop_to,
         graph_format: parsed.graph_format,
         graph_map_tokens: parsed.graph_map_tokens,
         matches: parsed.match_terms,
@@ -106,7 +106,7 @@ where
         symbols: parsed.symbols,
         task: parsed.task,
         top_k: parsed.top_k,
-        max_soup_bytes: parsed.max_soup_bytes,
+        max_slop_bytes: parsed.max_slop_bytes,
         reindex: parsed.reindex,
         explain_selection: parsed.explain_selection,
         dry_run: parsed.dry_run,
@@ -123,41 +123,41 @@ mod tests {
 
     #[test]
     fn rejects_missing_inputs() {
-        let result = parse_cli_args_from(["soupify"]);
+        let result = parse_cli_args_from(["slop"]);
         let error = result.expect_err("expected missing input failure");
         assert!(error.to_string().contains("required"));
     }
 
     #[test]
-    fn rejects_desoupify_show_combination() {
-        let result = parse_cli_args_from(["soupify", "-d", "-s", "file.txt"]);
+    fn rejects_deslop_show_combination() {
+        let result = parse_cli_args_from(["slop", "-d", "-s", "file.txt"]);
         let error = result.expect_err("expected invalid flag combination");
         assert!(error.to_string().contains("cannot be combined"));
     }
 
     #[test]
     fn parses_include_graph_flag() {
-        let result = parse_cli_args_from(["soupify", "-g", "file.txt"]).expect("should parse");
+        let result = parse_cli_args_from(["slop", "-g", "file.txt"]).expect("should parse");
         assert!(result.include_graph);
     }
 
     #[test]
     fn parses_respect_gitignore_flag() {
-        let result = parse_cli_args_from(["soupify", "--respect-gitignore", "file.txt"])
+        let result = parse_cli_args_from(["slop", "--respect-gitignore", "file.txt"])
             .expect("should parse");
         assert!(result.respect_gitignore);
     }
 
     #[test]
     fn respect_gitignore_defaults_to_false() {
-        let result = parse_cli_args_from(["soupify", "file.txt"]).expect("should parse");
+        let result = parse_cli_args_from(["slop", "file.txt"]).expect("should parse");
         assert!(!result.respect_gitignore);
     }
 
     #[test]
     fn parses_graph_format_and_tokens() {
         let result = parse_cli_args_from([
-            "soupify",
+            "slop",
             "--graph-format",
             "dot",
             "--graph-map-tokens",
@@ -170,12 +170,12 @@ mod tests {
     }
 
     #[test]
-    fn parses_soupify_to_flag() {
+    fn parses_slop_to_flag() {
         let result =
-            parse_cli_args_from(["soupify", "--soupify-to", "/tmp/out", "file.txt"])
+            parse_cli_args_from(["slop", "--slop-to", "/tmp/out", "file.txt"])
                 .expect("should parse");
         assert_eq!(
-            result.soupify_to.as_deref(),
+            result.slop_to.as_deref(),
             Some(std::path::Path::new("/tmp/out"))
         );
     }

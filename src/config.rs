@@ -3,16 +3,16 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::error::SoupifyError;
+use crate::error::SlopError;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub connect_with_downloads_watcher: bool,
-    pub auto_desoupify: bool,
+    pub auto_deslop: bool,
     pub warn_before_overwriting: bool,
-    pub to_desoupify_folder: Option<PathBuf>,
-    pub soupified_folder: Option<PathBuf>,
+    pub to_deslop_folder: Option<PathBuf>,
+    pub slopified_folder: Option<PathBuf>,
     pub include_graph: bool,
     pub respect_gitignore: bool,
     pub graph_map_tokens: usize,
@@ -21,7 +21,7 @@ pub struct Config {
     pub index_dir: Option<PathBuf>,
     pub selection_default_hops: usize,
     pub top_k: usize,
-    pub max_soup_bytes: usize,
+    pub max_slop_bytes: usize,
     pub allow_fuzzy_task: bool,
     pub selection_provenance: bool,
     pub selection_provenance_max_bytes: usize,
@@ -35,10 +35,10 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             connect_with_downloads_watcher: false,
-            auto_desoupify: false,
+            auto_deslop: false,
             warn_before_overwriting: false,
-            to_desoupify_folder: None,
-            soupified_folder: None,
+            to_deslop_folder: None,
+            slopified_folder: None,
             include_graph: false,
             respect_gitignore: false,
             graph_map_tokens: 2048,
@@ -47,7 +47,7 @@ impl Default for Config {
             index_dir: None,
             selection_default_hops: 1,
             top_k: 12,
-            max_soup_bytes: 1_048_576,
+            max_slop_bytes: 1_048_576,
             allow_fuzzy_task: true,
             selection_provenance: false,
             selection_provenance_max_bytes: 2048,
@@ -66,46 +66,46 @@ pub fn load_config() -> Config {
     load_config_from(&config_path).unwrap_or_default()
 }
 
-pub fn load_config_from(path: &Path) -> Result<Config, SoupifyError> {
+pub fn load_config_from(path: &Path) -> Result<Config, SlopError> {
     let contents = fs::read_to_string(path).map_err(|error| {
-        SoupifyError::ConfigError(format!("{}: {}", path.display(), error))
+        SlopError::ConfigError(format!("{}: {}", path.display(), error))
     })?;
     serde_yaml::from_str(&contents)
-        .map_err(|error| SoupifyError::ConfigError(format!("{}: {}", path.display(), error)))
+        .map_err(|error| SlopError::ConfigError(format!("{}: {}", path.display(), error)))
 }
 
 pub fn default_config_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    Some(home.join(".config").join("soupify").join("config.yaml"))
+    Some(home.join(".config").join("slop").join("config.yaml"))
 }
 
 pub fn default_config_yaml() -> String {
     format!(
-        "# Soupify configuration\n\
+        "# slop configuration\n\
          # Settings here are scanned at every invocation and can be overridden\n\
          # by command-line flags.\n\n\
-         # Connect with Sharktopus (downloads watcher). If true, Soupify will\n\
-         # add/verify a rule to automatically move .soup.md files downloaded to\n\
-         # $HOME/Downloads into the \"to desoupify\" folder.\n\
+         # Connect with Sharktopus (downloads watcher). If true, slop will\n\
+         # add/verify a rule to automatically move .slop.md files downloaded to\n\
+         # $HOME/Downloads into the \"to deslop\" folder.\n\
          connect_with_downloads_watcher: {connect_watcher}\n\n\
-         # If true, Soupify will automatically de-soupify any Soup files in the\n\
-         # \"to desoupify\" folder. If false, they are only moved there and the\n\
-         # user must manually run Soupify to de-soupify them.\n\
-         auto_desoupify: {auto_desoupify}\n\n\
-         # If true, Soupify will warn before overwriting existing files during\n\
-         # de-soupification.\n\
+         # If true, slop will automatically de-slop any Soup files in the\n\
+         # \"to deslop\" folder. If false, they are only moved there and the\n\
+         # user must manually run slop to de-slop them.\n\
+         auto_deslop: {auto_deslop}\n\n\
+         # If true, slop will warn before overwriting existing files during\n\
+         # de-slopification.\n\
          warn_before_overwriting: {warn_overwrite}\n\n\
-         # Path to the folder where Soup files are moved for de-soupification.\n\
-         # Defaults to $HOME/.soupify/to_desoupify\n\
-         to_desoupify_folder: {to_desoupify}\n\n\
+         # Path to the folder where Soup files are moved for de-slopification.\n\
+         # Defaults to $HOME/.slop/to_deslop\n\
+         to_deslop_folder: {to_deslop}\n\n\
          # Path to the folder where Soupified files are saved. Defaults to\n\
-         # $HOME/.soupify/soupified. Can be overridden at invocation with\n\
-         # --soupify-to.\n\
-         soupified_folder: {soupified}\n\n\
-         # Include a code-graph metadata block when soupifying. Override per-run\n\
+         # $HOME/.slop/slopified. Can be overridden at invocation with\n\
+         # --slop-to.\n\
+         slopified_folder: {slopified}\n\n\
+         # Include a code-graph metadata block when sloping. Override per-run\n\
          # with --include-graph.\n\
          include_graph: {include_graph}\n\n\
-         # If true, Soupify will skip any files or folders matched by the\n\
+         # If true, slop will skip any files or folders matched by the\n\
          # target repo's .gitignore when walking a directory. Override\n\
          # per-run with --respect-gitignore.\n\
          respect_gitignore: {respect_gitignore}\n\n\
@@ -116,40 +116,40 @@ pub fn default_config_yaml() -> String {
          # Force-include declared protocols/superclasses of seed files.\n\
          graph_force_include_supertypes: {force_supertypes}\n\n\
          # Directory for the selection full-text index. Defaults to\n\
-         # $HOME/.cache/soupify/index. Lives outside any repo tree.\n\
+         # $HOME/.cache/slop/index. Lives outside any repo tree.\n\
          index_dir: {index_dir}\n\n\
          # Default BFS radius around --seed files.\n\
          selection_default_hops: {sel_hops}\n\n\
          # Max files selected by --match/--task/--symbol/--seed.\n\
          top_k: {top_k}\n\n\
-         # Hard ceiling on serialized soup bytes (1 MiB default).\n\
-         max_soup_bytes: {max_soup_bytes}\n\n\
+         # Hard ceiling on serialized slop bytes (1 MiB default).\n\
+         max_slop_bytes: {max_slop_bytes}\n\n\
          # If false, --task is rejected (deterministic-only mode).\n\
          allow_fuzzy_task: {allow_fuzzy}\n\n\
-         # Emit a selection provenance #SOUP_META block.\n\
+         # Emit a selection provenance #SLOP_META block.\n\
          selection_provenance: {sel_prov}\n\n\
          # Max bytes for the provenance block.\n\
          selection_provenance_max_bytes: {sel_prov_max}\n\n\
          # Secret scan mode: off | warn | block. 'off' disables all scanning;\n\
          # 'warn' (default) prints warnings but never blocks; 'block' refuses\n\
-         # soups containing high-confidence secret patterns (private keys,\n\
+         # slops containing high-confidence secret patterns (private keys,\n\
          # AWS/Google/Stripe tokens, JWTs, etc.). Override per-run with\n\
          # --allow-secrets or --redact.\n\
          secret_scan: {secret_scan}\n",
         connect_watcher = false,
-        auto_desoupify = false,
+        auto_deslop = false,
         warn_overwrite = false,
-        to_desoupify = "~/.soupify/to_desoupify",
-        soupified = "~/.soupify/soupified",
+        to_deslop = "~/.slop/to_deslop",
+        slopified = "~/.slop/slopified",
         include_graph = false,
         respect_gitignore = false,
         graph_tokens = 2048,
         graph_format = "repomap",
         force_supertypes = true,
-        index_dir = "~/.cache/soupify/index",
+        index_dir = "~/.cache/slop/index",
         sel_hops = 1,
         top_k = 12,
-        max_soup_bytes = 1_048_576,
+        max_slop_bytes = 1_048_576,
         allow_fuzzy = true,
         sel_prov = false,
         sel_prov_max = 2048,
@@ -157,21 +157,21 @@ pub fn default_config_yaml() -> String {
     )
 }
 
-pub fn ensure_config_dir() -> Result<PathBuf, SoupifyError> {
+pub fn ensure_config_dir() -> Result<PathBuf, SlopError> {
     let config_path =
-        default_config_path().ok_or(SoupifyError::HomeDirectoryResolutionFailure)?;
+        default_config_path().ok_or(SlopError::HomeDirectoryResolutionFailure)?;
     let config_dir = config_path
         .parent()
-        .ok_or_else(|| SoupifyError::ConfigError("config path has no parent directory".to_string()))?;
+        .ok_or_else(|| SlopError::ConfigError("config path has no parent directory".to_string()))?;
 
-    fs::create_dir_all(config_dir).map_err(|error| SoupifyError::DirectoryCreationFailure {
+    fs::create_dir_all(config_dir).map_err(|error| SlopError::DirectoryCreationFailure {
         path: config_dir.to_path_buf(),
         source: error,
     })?;
 
     if !config_path.exists() {
         fs::write(&config_path, default_config_yaml()).map_err(|error| {
-            SoupifyError::FileWriteFailure {
+            SlopError::FileWriteFailure {
                 path: config_path.clone(),
                 source: error,
             }
@@ -181,19 +181,19 @@ pub fn ensure_config_dir() -> Result<PathBuf, SoupifyError> {
     Ok(config_path)
 }
 
-pub fn default_to_desoupify_folder() -> Option<PathBuf> {
+pub fn default_to_deslop_folder() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    Some(home.join(".soupify").join("to_desoupify"))
+    Some(home.join(".slop").join("to_deslop"))
 }
 
-pub fn default_soupified_folder() -> Option<PathBuf> {
+pub fn default_slopified_folder() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    Some(home.join(".soupify").join("soupified"))
+    Some(home.join(".slop").join("slopified"))
 }
 
 pub fn default_index_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    Some(home.join(".cache").join("soupify").join("index"))
+    Some(home.join(".cache").join("slop").join("index"))
 }
 
 #[cfg(test)]
@@ -212,11 +212,11 @@ mod tests {
     fn parses_partial_yaml_with_defaults() {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().join("config.yaml");
-        fs::write(&path, "auto_desoupify: true\ngraph_map_tokens: 4096\n")
+        fs::write(&path, "auto_deslop: true\ngraph_map_tokens: 4096\n")
             .expect("write config");
 
         let config = load_config_from(&path).expect("should parse");
-        assert!(config.auto_desoupify);
+        assert!(config.auto_deslop);
         assert!(!config.connect_with_downloads_watcher);
         assert_eq!(config.graph_map_tokens, 4096);
         assert_eq!(config.graph_format, "repomap");
@@ -230,10 +230,10 @@ mod tests {
         fs::write(
             &path,
             "connect_with_downloads_watcher: true\n\
-             auto_desoupify: true\n\
+             auto_deslop: true\n\
              warn_before_overwriting: true\n\
-             to_desoupify_folder: /tmp/to_desoupify\n\
-             soupified_folder: /tmp/soupified\n\
+             to_deslop_folder: /tmp/to_deslop\n\
+             slopified_folder: /tmp/slopified\n\
              include_graph: true\n\
              respect_gitignore: true\n\
              graph_map_tokens: 1024\n\
@@ -244,15 +244,15 @@ mod tests {
 
         let config = load_config_from(&path).expect("should parse");
         assert!(config.connect_with_downloads_watcher);
-        assert!(config.auto_desoupify);
+        assert!(config.auto_deslop);
         assert!(config.warn_before_overwriting);
         assert_eq!(
-            config.to_desoupify_folder,
-            Some(PathBuf::from("/tmp/to_desoupify"))
+            config.to_deslop_folder,
+            Some(PathBuf::from("/tmp/to_deslop"))
         );
         assert_eq!(
-            config.soupified_folder,
-            Some(PathBuf::from("/tmp/soupified"))
+            config.slopified_folder,
+            Some(PathBuf::from("/tmp/slopified"))
         );
         assert!(config.include_graph);
         assert!(config.respect_gitignore);
@@ -265,10 +265,10 @@ mod tests {
     fn default_config_has_expected_values() {
         let config = Config::default();
         assert!(!config.connect_with_downloads_watcher);
-        assert!(!config.auto_desoupify);
+        assert!(!config.auto_deslop);
         assert!(!config.warn_before_overwriting);
-        assert!(config.to_desoupify_folder.is_none());
-        assert!(config.soupified_folder.is_none());
+        assert!(config.to_deslop_folder.is_none());
+        assert!(config.slopified_folder.is_none());
         assert!(!config.include_graph);
         assert!(!config.respect_gitignore);
         assert_eq!(config.graph_map_tokens, 2048);
@@ -280,10 +280,10 @@ mod tests {
     fn default_config_yaml_contains_all_keys() {
         let yaml = default_config_yaml();
         assert!(yaml.contains("connect_with_downloads_watcher:"));
-        assert!(yaml.contains("auto_desoupify:"));
+        assert!(yaml.contains("auto_deslop:"));
         assert!(yaml.contains("warn_before_overwriting:"));
-        assert!(yaml.contains("to_desoupify_folder:"));
-        assert!(yaml.contains("soupified_folder:"));
+        assert!(yaml.contains("to_deslop_folder:"));
+        assert!(yaml.contains("slopified_folder:"));
         assert!(yaml.contains("include_graph:"));
         assert!(yaml.contains("respect_gitignore:"));
         assert!(yaml.contains("graph_map_tokens:"));
@@ -297,7 +297,7 @@ mod tests {
         let yaml = default_config_yaml();
         let config: Config = serde_yaml::from_str(&yaml).expect("should parse");
         assert!(!config.connect_with_downloads_watcher);
-        assert!(!config.auto_desoupify);
+        assert!(!config.auto_deslop);
         assert_eq!(config.graph_map_tokens, 2048);
         assert_eq!(config.graph_format, "repomap");
     }

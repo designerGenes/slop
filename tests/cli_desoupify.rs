@@ -4,14 +4,14 @@ use assert_cmd::Command;
 use tempfile::tempdir;
 
 fn cargo_bin() -> Command {
-    Command::cargo_bin("soupify").expect("binary should build")
+    Command::cargo_bin("slop").expect("binary should build")
 }
 
 #[test]
-fn desoupify_restores_deleted_files() {
+fn deslop_restores_deleted_files() {
     let temp = tempdir().expect("tempdir should exist");
     let source = temp.path().join("file1.txt");
-    let output_dir = temp.path().join("soup");
+    let output_dir = temp.path().join("slop");
     fs::write(&source, "hello\n").expect("source should be written");
 
     cargo_bin()
@@ -38,14 +38,14 @@ fn desoupify_restores_deleted_files() {
 }
 
 #[test]
-fn desoupify_restores_nested_directories() {
+fn deslop_restores_nested_directories() {
     let temp = tempdir().expect("tempdir should exist");
     let folder = temp.path().join("folder1");
     let nested = folder.join("nested/deeper");
     fs::create_dir_all(&nested).expect("directories should be created");
     fs::write(folder.join("file1.md"), "one").expect("file should be written");
     fs::write(nested.join("file2.md"), "two\n").expect("file should be written");
-    let output_dir = temp.path().join("soup");
+    let output_dir = temp.path().join("slop");
 
     cargo_bin()
         .arg("-r")
@@ -72,10 +72,10 @@ fn desoupify_restores_nested_directories() {
 }
 
 #[test]
-fn desoupify_overwrites_existing_files() {
+fn deslop_overwrites_existing_files() {
     let temp = tempdir().expect("tempdir should exist");
     let file = temp.path().join("file.txt");
-    let output_dir = temp.path().join("soup");
+    let output_dir = temp.path().join("slop");
     fs::write(&file, "fresh").expect("file should be written");
 
     cargo_bin()
@@ -102,13 +102,13 @@ fn desoupify_overwrites_existing_files() {
 }
 
 #[test]
-fn desoupify_works_when_selector_directory_is_missing() {
+fn deslop_works_when_selector_directory_is_missing() {
     let temp = tempdir().expect("tempdir should exist");
     let folder = temp.path().join("folder1");
     let nested = folder.join("nested");
     fs::create_dir_all(&nested).expect("directories should be created");
     fs::write(nested.join("file.txt"), "restored").expect("file should be written");
-    let output_dir = temp.path().join("soup");
+    let output_dir = temp.path().join("slop");
 
     cargo_bin()
         .arg("-r")
@@ -135,9 +135,9 @@ fn desoupify_works_when_selector_directory_is_missing() {
 }
 
 #[test]
-fn errors_when_no_soup_file_exists() {
+fn errors_when_no_slop_file_exists() {
     let temp = tempdir().expect("tempdir should exist");
-    let output_dir = temp.path().join("soup");
+    let output_dir = temp.path().join("slop");
     let selector = temp.path().join("missing.txt");
 
     cargo_bin()
@@ -147,14 +147,14 @@ fn errors_when_no_soup_file_exists() {
         .arg(&output_dir)
         .assert()
         .failure()
-        .stderr(predicates::str::contains("no matching soup file"));
+        .stderr(predicates::str::contains("no matching slop file"));
 }
 
 #[test]
-fn errors_when_multiple_soup_files_match() {
+fn errors_when_multiple_slop_files_match() {
     let temp = tempdir().expect("tempdir should exist");
     let source = temp.path().join("file.txt");
-    let output_dir = temp.path().join("soup");
+    let output_dir = temp.path().join("slop");
     fs::write(&source, "hello").expect("source should be written");
 
     cargo_bin()
@@ -165,7 +165,7 @@ fn errors_when_multiple_soup_files_match() {
         .success();
 
     fs::copy(output_dir.join("file.md"), output_dir.join("duplicate.md"))
-        .expect("duplicate soup file should be created");
+        .expect("duplicate slop file should be created");
 
     cargo_bin()
         .args(["-d"])
@@ -174,7 +174,7 @@ fn errors_when_multiple_soup_files_match() {
         .arg(&output_dir)
         .assert()
         .failure()
-        .stderr(predicates::str::contains("multiple soup files matched"));
+        .stderr(predicates::str::contains("multiple slop files matched"));
 }
 
 #[cfg(unix)]
@@ -186,7 +186,7 @@ fn errors_when_restored_file_cannot_be_written() {
     let source_dir = temp.path().join("source");
     fs::create_dir_all(&source_dir).expect("directory should be created");
     let source = source_dir.join("file.txt");
-    let output_dir = temp.path().join("soup");
+    let output_dir = temp.path().join("slop");
     fs::write(&source, "hello").expect("source should be written");
 
     cargo_bin()

@@ -1,6 +1,6 @@
 pub mod cli;
 pub mod config;
-pub mod desoupify;
+pub mod deslop;
 pub mod error;
 pub mod graph;
 pub mod models;
@@ -10,15 +10,15 @@ pub mod repomap;
 pub mod secrets;
 pub mod selection;
 pub mod sharktopus;
-pub mod soup_format;
-pub mod soupify;
+pub mod slop_format;
+pub mod slop;
 
 use cli::parse_cli_args;
 use config::load_config;
-use error::SoupifyError;
+use error::SlopError;
 use open::{OutputDirOpener, SystemOutputDirOpener};
 
-pub fn run() -> Result<(), SoupifyError> {
+pub fn run() -> Result<(), SlopError> {
     if let Err(error) = config::ensure_config_dir() {
         eprintln!("warning: failed to create config directory: {error}");
     }
@@ -33,7 +33,7 @@ pub fn run() -> Result<(), SoupifyError> {
     run_with_opener(&args, &config, &SystemOutputDirOpener)
 }
 
-pub fn sync() -> Result<Vec<String>, SoupifyError> {
+pub fn sync() -> Result<Vec<String>, SlopError> {
     if let Err(error) = config::ensure_config_dir() {
         eprintln!("warning: failed to create config directory: {error}");
     }
@@ -45,26 +45,26 @@ pub fn run_with_opener(
     args: &models::CliArgs,
     config: &config::Config,
     opener: &impl OutputDirOpener,
-) -> Result<(), SoupifyError> {
-    if args.desoupify {
-        desoupify::run_desoupify(args, config)?;
+) -> Result<(), SlopError> {
+    if args.deslop {
+        deslop::run_deslop(args, config)?;
         return Ok(());
     }
 
-    let soup_file = soupify::run_soupify(args, config)?;
+    let slop_file = slop::run_slop(args, config)?;
     if args.show_output_dir {
-        let output_dir = soup_file
+        let output_dir = slop_file
             .parent()
             .map(|path| path.to_path_buf())
-            .ok_or_else(|| SoupifyError::OpenDirectoryAfterWriteFailed {
-                soup_file: soup_file.clone(),
-                directory: soup_file.clone(),
-                message: "generated soup file has no parent directory".to_string(),
+            .ok_or_else(|| SlopError::OpenDirectoryAfterWriteFailed {
+                slop_file: slop_file.clone(),
+                directory: slop_file.clone(),
+                message: "generated slop file has no parent directory".to_string(),
             })?;
 
         if let Err(error) = open::open_output_dir_with(opener, &output_dir) {
-            return Err(SoupifyError::OpenDirectoryAfterWriteFailed {
-                soup_file,
+            return Err(SlopError::OpenDirectoryAfterWriteFailed {
+                slop_file,
                 directory: output_dir,
                 message: error.to_string(),
             });

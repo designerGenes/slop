@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::config::Config;
-use crate::error::SoupifyError;
+use crate::error::SlopError;
 use crate::graph;
 use crate::models::{CliArgs, SoupMetaBlock, SourceFile};
 use crate::pathing::{
@@ -11,10 +11,10 @@ use crate::pathing::{
 };
 use crate::secrets;
 use crate::selection;
-use crate::soup_format::{analyze_contents, serialize_document};
+use crate::slop_format::{analyze_contents, serialize_document};
 
-pub fn run_soupify(args: &CliArgs, config: &Config) -> Result<PathBuf, SoupifyError> {
-    let cwd = std::env::current_dir().map_err(|error| SoupifyError::FileReadFailure {
+pub fn run_slop(args: &CliArgs, config: &Config) -> Result<PathBuf, SlopError> {
+    let cwd = std::env::current_dir().map_err(|error| SlopError::FileReadFailure {
         path: PathBuf::from("."),
         source: error,
     })?;
@@ -22,8 +22,8 @@ pub fn run_soupify(args: &CliArgs, config: &Config) -> Result<PathBuf, SoupifyEr
     let output_dir = resolve_output_dir(
         args.output_dir
             .as_deref()
-            .or(args.soupify_to.as_deref())
-            .or(config.soupified_folder.as_deref()),
+            .or(args.slop_to.as_deref())
+            .or(config.slopified_folder.as_deref()),
         &cwd,
     )?;
     let resolved_inputs = args
@@ -34,7 +34,7 @@ pub fn run_soupify(args: &CliArgs, config: &Config) -> Result<PathBuf, SoupifyEr
 
     for input in &resolved_inputs {
         if !input.exists() {
-            return Err(SoupifyError::MissingInputPath(input.clone()));
+            return Err(SlopError::MissingInputPath(input.clone()));
         }
     }
 
@@ -43,7 +43,7 @@ pub fn run_soupify(args: &CliArgs, config: &Config) -> Result<PathBuf, SoupifyEr
     let candidate_files =
         collect_source_files(&resolved_inputs, max_depth, &args.exclude, respect_gitignore)?;
     if candidate_files.is_empty() {
-        return Err(SoupifyError::InputExpandedToZeroFiles);
+        return Err(SlopError::InputExpandedToZeroFiles);
     }
 
     let corpus_root = graph::shared_git_root(&candidate_files)
@@ -116,13 +116,13 @@ pub fn run_soupify(args: &CliArgs, config: &Config) -> Result<PathBuf, SoupifyEr
 
     let markdown = serialize_document(&meta_blocks, &source_files)?;
 
-    fs::create_dir_all(&output_dir).map_err(|error| SoupifyError::DirectoryCreationFailure {
+    fs::create_dir_all(&output_dir).map_err(|error| SlopError::DirectoryCreationFailure {
         path: output_dir.clone(),
         source: error,
     })?;
 
     let output_file = output_dir.join(build_output_filename(&files, !meta_blocks.is_empty())?);
-    fs::write(&output_file, markdown).map_err(|error| SoupifyError::FileWriteFailure {
+    fs::write(&output_file, markdown).map_err(|error| SlopError::FileWriteFailure {
         path: output_file.clone(),
         source: error,
     })?;
@@ -134,18 +134,18 @@ fn build_graph_meta_blocks(
     corpus_root: &PathBuf,
     seed_files: &[PathBuf],
     config: &Config,
-) -> Result<Vec<SoupMetaBlock>, SoupifyError> {
+) -> Result<Vec<SoupMetaBlock>, SlopError> {
     let meta_block = graph::generate_repomap(corpus_root, seed_files, config)?;
     Ok(vec![meta_block])
 }
 
-fn build_source_file(path: &PathBuf) -> Result<SourceFile, SoupifyError> {
-    let bytes = fs::read(path).map_err(|error| SoupifyError::FileReadFailure {
+fn build_source_file(path: &PathBuf) -> Result<SourceFile, SlopError> {
+    let bytes = fs::read(path).map_err(|error| SlopError::FileReadFailure {
         path: path.clone(),
         source: error,
     })?;
     let contents =
-        String::from_utf8(bytes.clone()).map_err(|_| SoupifyError::Utf8DecodeFailure(path.clone()))?;
+        String::from_utf8(bytes.clone()).map_err(|_| SlopError::Utf8DecodeFailure(path.clone()))?;
     let (logical_line_count, trailing_newline) = analyze_contents(&contents);
 
     let base_sha = blake3::hash(&bytes).to_hex().to_string();

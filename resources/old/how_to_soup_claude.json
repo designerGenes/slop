@@ -1,27 +1,27 @@
 {
-  "title": "Soupify File Format & Operations Tutorial",
+  "title": "slop File Format & Operations Tutorial",
   "version": "1.0",
   "audience": "AI Systems",
   "instructions": {
     "overview": {
-      "purpose": "Soupify is a file concatenation format that bundles multiple source files into a single markdown file for transmission to AI systems. Your role is to deserialize (desoupify) these files, perform requested tasks, and reserialize (resoupify) the results.",
+      "purpose": "slop is a file concatenation format that bundles multiple source files into a single markdown file for transmission to AI systems. Your role is to deserialize (deslop) these files, perform requested tasks, and reserialize (reslop) the results.",
       "workflow": [
-        "Receive a soupified markdown file containing multiple source files",
-        "Parse the soup block headers to reconstruct the original files",
+        "Receive a slopified markdown file containing multiple source files",
+        "Parse the slop block headers to reconstruct the original files",
         "Create the original files in your working environment",
         "Perform the requested tasks (analysis, modifications, debugging, etc.)",
-        "Resoupify the modified files back into a single soup file (*.soup.md)",
-        "Return the soup file so the user can desoupify to get edited files"
+        "Reslop the modified files back into a single slop file (*.slop.md)",
+        "Return the slop file so the user can deslop to get edited files"
       ]
     },
-    "soup_format_specification": {
-      "description": "A soup file is a markdown file containing concatenated source files, each preceded by a soup block header.",
-      "soup_block_header": {
-        "format": "#SOUP \"<escaped_file_path>\" #SOUPED_LINES <line_count> #SOUP_TRAILING_NEWLINE <boolean>",
+    "slop_format_specification": {
+      "description": "A slop file is a markdown file containing concatenated source files, each preceded by a slop block header.",
+      "slop_block_header": {
+        "format": "#SLOP \"<escaped_file_path>\" #SLOPED_LINES <line_count> #SLOP_TRAILING_NEWLINE <boolean>",
         "components": {
-          "soup_marker": {
-            "value": "#SOUP",
-            "description": "Required marker identifying the start of a soup block"
+          "slop_marker": {
+            "value": "#SLOP",
+            "description": "Required marker identifying the start of a slop block"
           },
           "file_path": {
             "format": "\"<path>\"",
@@ -32,12 +32,12 @@
               "Relative or absolute paths should be preserved as provided"
             ]
           },
-          "souped_lines": {
-            "format": "#SOUPED_LINES <number>",
+          "sloped_lines": {
+            "format": "#SLOPED_LINES <number>",
             "description": "The exact number of lines in the file content that follows"
           },
           "trailing_newline": {
-            "format": "#SOUP_TRAILING_NEWLINE <true|false>",
+            "format": "#SLOP_TRAILING_NEWLINE <true|false>",
             "description": "Boolean indicating whether the original file ended with a newline character",
             "notes": [
               "true = file ended with newline",
@@ -46,23 +46,23 @@
             ]
           }
         },
-        "example": "#SOUP \"src/components/Button.tsx\" #SOUPED_LINES 42 #SOUP_TRAILING_NEWLINE true"
+        "example": "#SLOP \"src/components/Button.tsx\" #SLOPED_LINES 42 #SLOP_TRAILING_NEWLINE true"
       },
       "structure": {
-        "format": "soup_block_header\\n<file_content_exactly_N_lines>",
+        "format": "slop_block_header\\n<file_content_exactly_N_lines>",
         "notes": [
-          "Each file's content follows immediately after its soup block header",
-          "Content spans exactly the number of lines specified in #SOUPED_LINES",
-          "Multiple soup blocks are concatenated sequentially in the soup file",
-          "No extra separators between soup blocks—next header follows immediately"
+          "Each file's content follows immediately after its slop block header",
+          "Content spans exactly the number of lines specified in #SLOPED_LINES",
+          "Multiple slop blocks are concatenated sequentially in the slop file",
+          "No extra separators between slop blocks—next header follows immediately"
         ]
       }
     },
-    "desoupify": {
-      "description": "Convert a soup file back into the original files",
+    "deslop": {
+      "description": "Convert a slop file back into the original files",
       "algorithm": [
-        "1. Open and read the entire soup file",
-        "2. Scan for lines matching the pattern: #SOUP \"<path>\" #SOUPED_LINES <N> #SOUP_TRAILING_NEWLINE <bool>",
+        "1. Open and read the entire slop file",
+        "2. Scan for lines matching the pattern: #SLOP \"<path>\" #SLOPED_LINES <N> #SLOP_TRAILING_NEWLINE <bool>",
         "3. For each header found:",
         "   a. Extract the file path from the quoted string",
         "   b. Extract the line count (N) to know how many lines follow",
@@ -71,10 +71,10 @@
         "   e. Create parent directories for the file path as needed",
         "   f. Write the buffer to disk at the specified path",
         "   g. If trailing_newline is false, remove the final newline from the file",
-        "4. Repeat until all soup blocks are processed"
+        "4. Repeat until all slop blocks are processed"
       ],
       "implementation_notes": [
-        "Use a regex pattern like: ^#SOUP\\s+\"(.+?)\"\\s+#SOUPED_LINES\\s+(\\d+)\\s+#SOUP_TRAILING_NEWLINE\\s+(true|false)$",
+        "Use a regex pattern like: ^#SLOP\\s+\"(.+?)\"\\s+#SLOPED_LINES\\s+(\\d+)\\s+#SLOP_TRAILING_NEWLINE\\s+(true|false)$",
         "Handle path escaping: unescape any escape sequences in the path",
         "Track line numbers carefully to extract exactly N lines",
         "Create parent directories if they don't exist (mkdir -p equivalent)",
@@ -82,17 +82,17 @@
         "Handle edge cases: empty files (N=0), files with no trailing newline"
       ]
     },
-    "resoupify": {
-      "description": "Convert modified files back into a soup file",
+    "reslop": {
+      "description": "Convert modified files back into a slop file",
       "algorithm": [
         "1. Identify all files you've modified or created during your work",
         "2. For each file:",
         "   a. Read the complete file content into memory",
         "   b. Count the total number of lines (split on newline, accounting for the final state)",
         "   c. Determine if the file ends with a newline character",
-        "   d. Generate the soup block header: #SOUP \"<path>\" #SOUPED_LINES <count> #SOUP_TRAILING_NEWLINE <bool>",
-        "   e. Append the header followed by the exact file content to the soup output",
-        "3. Write all concatenated soup blocks to a new file with a .soup.md extension"
+        "   d. Generate the slop block header: #SLOP \"<path>\" #SLOPED_LINES <count> #SLOP_TRAILING_NEWLINE <bool>",
+        "   e. Append the header followed by the exact file content to the slop output",
+        "3. Write all concatenated slop blocks to a new file with a .slop.md extension"
       ],
       "implementation_notes": [
         "Line count should match exactly what will be written",
@@ -102,14 +102,14 @@
         "  - If content is \"line1\\n\": line_count = 1",
         "  - If content is \"line1\\nline2\\n\": line_count = 2",
         "  - If content is \"line1\\nline2\" (no trailing newline): line_count = 2, trailing=false",
-        "Escape special characters in file paths as needed for the soup format",
+        "Escape special characters in file paths as needed for the slop format",
         "Maintain file order for reproducibility",
         "Include all modified files, not just changed ones (in case deletions/renames matter)"
       ]
     },
     "practical_examples": {
-      "desoupify_example": {
-        "soup_file_content": "#SOUP \"src/main.rs\" #SOUPED_LINES 3 #SOUP_TRAILING_NEWLINE true\nfn main() {\n    println!(\"Hello, world!\");\n}\n#SOUP \"Cargo.toml\" #SOUPED_LINES 2 #SOUP_TRAILING_NEWLINE false\n[package]\nname = \"hello\"",
+      "deslop_example": {
+        "slop_file_content": "#SLOP \"src/main.rs\" #SLOPED_LINES 3 #SLOP_TRAILING_NEWLINE true\nfn main() {\n    println!(\"Hello, world!\");\n}\n#SLOP \"Cargo.toml\" #SLOPED_LINES 2 #SLOP_TRAILING_NEWLINE false\n[package]\nname = \"hello\"",
         "expected_output": {
           "files_created": [
             "src/main.rs (3 lines, ends with newline)",
@@ -119,12 +119,12 @@
           "Cargo.toml_content": "[package]\nname = \"hello\""
         }
       },
-      "resoupify_example": {
+      "reslop_example": {
         "input_files": {
           "index.js": "console.log('test');",
           "package.json": "{\n  \"name\": \"app\"\n}"
         },
-        "expected_soup_output": "#SOUP \"index.js\" #SOUPED_LINES 1 #SOUP_TRAILING_NEWLINE false\nconsole.log('test');\n#SOUP \"package.json\" #SOUPED_LINES 2 #SOUP_TRAILING_NEWLINE true\n{\n  \"name\": \"app\"\n}"
+        "expected_slop_output": "#SLOP \"index.js\" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE false\nconsole.log('test');\n#SLOP \"package.json\" #SLOPED_LINES 2 #SLOP_TRAILING_NEWLINE true\n{\n  \"name\": \"app\"\n}"
       }
     },
     "error_handling": {
@@ -133,23 +133,23 @@
         "recovery": "Report the line number and problematic content to the user"
       },
       "missing_metadata": {
-        "description": "If a soup block header is missing #SOUPED_LINES or #SOUP_TRAILING_NEWLINE",
+        "description": "If a slop block header is missing #SLOPED_LINES or #SLOP_TRAILING_NEWLINE",
         "recovery": "Report what metadata is missing and which file path was partially parsed"
       },
       "line_count_mismatch": {
-        "description": "If fewer lines exist after a header than #SOUPED_LINES specifies",
+        "description": "If fewer lines exist after a header than #SLOPED_LINES specifies",
         "recovery": "Report the expected line count vs. actual lines found, and the affected file path"
       }
     },
     "best_practices": [
-      "Always validate soup block headers before consuming file content",
-      "Track your file modifications carefully so you can resoupify accurately",
-      "When desoupifying, create parent directories automatically",
-      "Preserve the exact line count when resoupifying—off-by-one errors will corrupt the soup file",
+      "Always validate slop block headers before consuming file content",
+      "Track your file modifications carefully so you can reslop accurately",
+      "When desloping, create parent directories automatically",
+      "Preserve the exact line count when resloping—off-by-one errors will corrupt the slop file",
       "Handle the trailing newline flag correctly; it's essential for exact file restoration",
-      "For files with no content, use #SOUPED_LINES 0 and #SOUP_TRAILING_NEWLINE false",
-      "If the user requests specific files to return, only resoupify those files",
-      "Document any files you create or modify that aren't in the original soup—add them to the resoupified output"
+      "For files with no content, use #SLOPED_LINES 0 and #SLOP_TRAILING_NEWLINE false",
+      "If the user requests specific files to return, only reslop those files",
+      "Document any files you create or modify that aren't in the original slop—add them to the reslopified output"
     ]
   }
 }

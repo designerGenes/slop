@@ -201,7 +201,7 @@ mod tests {
     use std::io::Write;
 
     fn write_temp(name: &str, contents: &str) -> (String, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join("soupify_tags_tests");
+        let dir = std::env::temp_dir().join("slop_tags_tests");
         std::fs::create_dir_all(&dir).ok();
         let path = dir.join(name);
         let mut f = std::fs::File::create(&path).unwrap();

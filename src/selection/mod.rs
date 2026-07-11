@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
-use crate::error::SoupifyError;
+use crate::error::SlopError;
 use crate::models::CliArgs;
 
 #[derive(Debug, Clone)]
@@ -49,9 +49,9 @@ pub fn selection_mode(args: &CliArgs) -> bool {
         || args.task.is_some()
 }
 
-pub fn build_selectors(args: &CliArgs, config: &Config) -> Result<Selectors, SoupifyError> {
+pub fn build_selectors(args: &CliArgs, config: &Config) -> Result<Selectors, SlopError> {
     if args.task.is_some() && !config.allow_fuzzy_task {
-        return Err(SoupifyError::FuzzyTaskDisabled);
+        return Err(SlopError::FuzzyTaskDisabled);
     }
 
     Ok(Selectors {
@@ -69,7 +69,7 @@ pub fn select_files(
     map_reserve_bytes: usize,
     config: &Config,
     force_reindex: bool,
-) -> Result<Selection, SoupifyError> {
+) -> Result<Selection, SlopError> {
     let top_k = config.top_k;
 
     let mut candidates: Vec<ScoredPath> = Vec::new();
@@ -173,7 +173,7 @@ pub fn select_files(
     // Budget fill
     let (selected, dropped) = budget::fill_budget(
         &candidates,
-        config.max_soup_bytes,
+        config.max_slop_bytes,
         map_reserve_bytes,
         top_k,
     )?;

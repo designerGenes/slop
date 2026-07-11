@@ -5,11 +5,11 @@ use assert_cmd::Command;
 use tempfile::tempdir;
 
 fn cargo_bin() -> Command {
-    Command::cargo_bin("soupify").expect("binary should build")
+    Command::cargo_bin("slop").expect("binary should build")
 }
 
 #[test]
-fn soupifies_one_file() {
+fn slopifies_one_file() {
     let temp = tempdir().expect("tempdir should exist");
     let input = temp.path().join("file1.md");
     let output_dir = temp.path().join("out");
@@ -22,13 +22,13 @@ fn soupifies_one_file() {
         .assert()
         .success();
 
-    let soup = fs::read_to_string(output_dir.join("file1.md")).expect("soup file should exist");
-    assert!(soup.contains("#SOUP"));
-    assert!(soup.contains(input.to_string_lossy().as_ref()));
+    let slop = fs::read_to_string(output_dir.join("file1.md")).expect("slop file should exist");
+    assert!(slop.contains("#SLOP"));
+    assert!(slop.contains(input.to_string_lossy().as_ref()));
 }
 
 #[test]
-fn soupifies_multiple_files() {
+fn slopifies_multiple_files() {
     let temp = tempdir().expect("tempdir should exist");
     let file1 = temp.path().join("file1.md");
     let file3 = temp.path().join("file3.md");
@@ -47,7 +47,7 @@ fn soupifies_multiple_files() {
 }
 
 #[test]
-fn soupifies_nested_directories() {
+fn slopifies_nested_directories() {
     let temp = tempdir().expect("tempdir should exist");
     let directory = temp.path().join("folder1");
     fs::create_dir_all(directory.join("nested/deeper")).expect("directories should be created");
@@ -69,7 +69,7 @@ fn soupifies_nested_directories() {
 }
 
 #[test]
-fn soupifies_directory_without_recursive_flag() {
+fn slopifies_directory_without_recursive_flag() {
     let temp = tempdir().expect("tempdir should exist");
     let directory = temp.path().join("folder1");
     fs::create_dir_all(&directory).expect("directory should be created");
@@ -91,7 +91,7 @@ fn soupifies_directory_without_recursive_flag() {
 }
 
 #[test]
-fn soupifies_only_direct_files_without_recursive_flag() {
+fn slopifies_only_direct_files_without_recursive_flag() {
     let temp = tempdir().expect("tempdir should exist");
     let file1 = temp.path().join("file1.md");
     let file2 = temp.path().join("file2.md");
@@ -110,9 +110,9 @@ fn soupifies_only_direct_files_without_recursive_flag() {
         .assert()
         .success();
 
-    let soup = fs::read_to_string(output_dir.join("file1_file2.md"))
-        .expect("soup file should exist");
-    assert!(!soup.contains("three")); // nested file should not be included
+    let slop = fs::read_to_string(output_dir.join("file1_file2.md"))
+        .expect("slop file should exist");
+    assert!(!slop.contains("three")); // nested file should not be included
 }
 
 #[test]
@@ -129,7 +129,7 @@ fn uses_default_output_directory() {
         .assert()
         .success();
 
-    assert!(home.join(".soupify/soupified/sample.md").exists());
+    assert!(home.join(".slop/slopified/sample.md").exists());
 }
 
 #[test]
@@ -196,14 +196,14 @@ fn generates_expected_output_filename() {
 }
 
 #[test]
-fn overwrites_existing_soup_file() {
+fn overwrites_existing_slop_file() {
     let temp = tempdir().expect("tempdir should exist");
     let input = temp.path().join("sample.txt");
     let output_dir = temp.path().join("out");
     fs::create_dir_all(&output_dir).expect("output dir should be created");
     fs::write(&input, "updated").expect("input file should be written");
     fs::write(output_dir.join("sample.md"), "old contents")
-        .expect("existing soup file should be written");
+        .expect("existing slop file should be written");
 
     cargo_bin()
         .arg(&input)
@@ -212,9 +212,9 @@ fn overwrites_existing_soup_file() {
         .assert()
         .success();
 
-    let soup = fs::read_to_string(output_dir.join("sample.md")).expect("soup file should exist");
-    assert!(soup.contains("updated"));
-    assert!(!soup.contains("old contents"));
+    let slop = fs::read_to_string(output_dir.join("sample.md")).expect("slop file should exist");
+    assert!(slop.contains("updated"));
+    assert!(!slop.contains("old contents"));
 }
 
 #[test]
@@ -226,7 +226,7 @@ fn invokes_show_output_directory_via_mock_abstraction() {
     fs::write(&input, "sample").expect("input file should be written");
 
     cargo_bin()
-        .env("SOUPIFY_OPEN_MOCK_FILE", &mock_log)
+        .env("slop_OPEN_MOCK_FILE", &mock_log)
         .arg(&input)
         .arg("-o")
         .arg(&output_dir)
@@ -246,7 +246,7 @@ fn reports_open_failure_after_writing_file() {
     fs::write(&input, "sample").expect("input file should be written");
 
     cargo_bin()
-        .env("SOUPIFY_OPEN_FORCE_FAIL", "1")
+        .env("slop_OPEN_FORCE_FAIL", "1")
         .arg(&input)
         .arg("-o")
         .arg(&output_dir)
@@ -292,7 +292,7 @@ fn rejects_missing_input_paths() {
 }
 
 #[test]
-fn rejects_desoupify_show_combination() {
+fn rejects_deslop_show_combination() {
     cargo_bin()
         .args(["-d", "-s", "input.txt"])
         .assert()
@@ -318,66 +318,66 @@ fn rejects_input_that_expands_to_zero_files() {
 }
 
 #[test]
-fn rejects_malformed_existing_soup_during_desoupify() {
+fn rejects_malformed_existing_slop_during_deslop() {
     let temp = tempdir().expect("tempdir should exist");
-    let soup_dir = temp.path().join("soup");
-    fs::create_dir_all(&soup_dir).expect("directory should be created");
+    let slop_dir = temp.path().join("slop");
+    fs::create_dir_all(&slop_dir).expect("directory should be created");
     let selector = temp.path().join("file.txt");
-    fs::write(soup_dir.join("bad.md"), "#SOUP \"/tmp/file.txt\"")
-        .expect("soup file should be written");
+    fs::write(slop_dir.join("bad.md"), "#SLOP \"/tmp/file.txt\"")
+        .expect("slop file should be written");
 
     cargo_bin()
         .args(["-d"])
         .arg(&selector)
         .arg("-o")
-        .arg(&soup_dir)
+        .arg(&slop_dir)
         .assert()
         .failure()
-        .stderr(predicates::str::contains("malformed soup header"));
+        .stderr(predicates::str::contains("malformed slop header"));
 }
 
 #[test]
-fn rejects_soup_missing_required_metadata() {
+fn rejects_slop_missing_required_metadata() {
     let temp = tempdir().expect("tempdir should exist");
-    let soup_dir = temp.path().join("soup");
-    fs::create_dir_all(&soup_dir).expect("directory should be created");
+    let slop_dir = temp.path().join("slop");
+    fs::create_dir_all(&slop_dir).expect("directory should be created");
     let selector = PathBuf::from("/tmp/file.txt");
     fs::write(
-        soup_dir.join("bad.md"),
-        format!("#SOUP \"{}\" #SOUPED_LINES 1\nhello", selector.display()),
+        slop_dir.join("bad.md"),
+        format!("#SLOP \"{}\" #SLOPED_LINES 1\nhello", selector.display()),
     )
-    .expect("soup file should be written");
+    .expect("slop file should be written");
 
     cargo_bin()
         .args(["-d"])
         .arg(&selector)
         .arg("-o")
-        .arg(&soup_dir)
+        .arg(&slop_dir)
         .assert()
         .failure()
-        .stderr(predicates::str::contains("missing soup metadata"));
+        .stderr(predicates::str::contains("missing slop metadata"));
 }
 
 #[test]
 fn rejects_declared_line_count_exceeding_available_lines() {
     let temp = tempdir().expect("tempdir should exist");
-    let soup_dir = temp.path().join("soup");
-    fs::create_dir_all(&soup_dir).expect("directory should be created");
+    let slop_dir = temp.path().join("slop");
+    fs::create_dir_all(&slop_dir).expect("directory should be created");
     let selector = PathBuf::from("/tmp/file.txt");
     fs::write(
-        soup_dir.join("bad.md"),
+        slop_dir.join("bad.md"),
         format!(
-            "#SOUP \"{}\" #SOUPED_LINES 2 #SOUP_TRAILING_NEWLINE 0\nhello",
+            "#SLOP \"{}\" #SLOPED_LINES 2 #SLOP_TRAILING_NEWLINE 0\nhello",
             selector.display()
         ),
     )
-    .expect("soup file should be written");
+    .expect("slop file should be written");
 
     cargo_bin()
         .args(["-d"])
         .arg(&selector)
         .arg("-o")
-        .arg(&soup_dir)
+        .arg(&slop_dir)
         .assert()
         .failure()
     .stderr(predicates::str::contains(
@@ -405,11 +405,11 @@ fn excludes_files_by_pattern() {
         .assert()
         .success();
 
-    let soup = fs::read_to_string(output_dir.join("file1_file3.md"))
-        .expect("soup file should exist");
-    assert!(soup.contains("one"));
-    assert!(soup.contains("three"));
-    assert!(!soup.contains("two")); // swift file should be excluded
+    let slop = fs::read_to_string(output_dir.join("file1_file3.md"))
+        .expect("slop file should exist");
+    assert!(slop.contains("one"));
+    assert!(slop.contains("three"));
+    assert!(!slop.contains("two")); // swift file should be excluded
 }
 
 #[test]
@@ -433,10 +433,10 @@ fn excludes_files_by_folder_name() {
         .assert()
         .success();
 
-    let soup = fs::read_to_string(output_dir.join("file1.md"))
-        .expect("soup file should exist");
-    assert!(soup.contains("one"));
-    assert!(!soup.contains("two")); // folder2 file should be excluded
+    let slop = fs::read_to_string(output_dir.join("file1.md"))
+        .expect("slop file should exist");
+    assert!(slop.contains("one"));
+    assert!(!slop.contains("two")); // folder2 file should be excluded
 }
 
 #[test]
@@ -460,11 +460,11 @@ fn excludes_files_by_regex() {
         .success();
 
     // Files are sorted alphabetically, so the output filename will be example_file1.md
-    let soup = fs::read_to_string(output_dir.join("example_file1.md"))
-        .expect("soup file should exist");
-    assert!(soup.contains("one"));
-    assert!(soup.contains("three"));
-    assert!(!soup.contains("two")); // test_file should be excluded
+    let slop = fs::read_to_string(output_dir.join("example_file1.md"))
+        .expect("slop file should exist");
+    assert!(slop.contains("one"));
+    assert!(slop.contains("three"));
+    assert!(!slop.contains("two")); // test_file should be excluded
 }
 
 #[test]
@@ -527,12 +527,12 @@ fn respects_gitignore_when_flag_passed() {
         .assert()
         .success();
 
-    // file1.md + the .gitignore file itself (dotfiles still soupify by
+    // file1.md + the .gitignore file itself (dotfiles still slop by
     // default); ignored.md is pruned because .gitignore lists it.
-    let soup = fs::read_to_string(output_dir.join("file1_gitignore.md"))
-        .expect("soup file should exist");
-    assert!(soup.contains("one"));
-    assert!(!soup.contains("two"));
+    let slop = fs::read_to_string(output_dir.join("file1_gitignore.md"))
+        .expect("slop file should exist");
+    assert!(slop.contains("one"));
+    assert!(!slop.contains("two"));
 }
 
 #[test]
@@ -556,19 +556,19 @@ fn ignores_gitignore_contents_without_flag() {
 
     // Without --respect-gitignore, .gitignore is just another file - nothing
     // is pruned, matching existing (pre-flag) behavior.
-    let soup = fs::read_to_string(output_dir.join("file1_gitignore_ignored.md"))
-        .expect("soup file should exist");
-    assert!(soup.contains("one"));
-    assert!(soup.contains("two"));
+    let slop = fs::read_to_string(output_dir.join("file1_gitignore_ignored.md"))
+        .expect("slop file should exist");
+    assert!(slop.contains("one"));
+    assert!(slop.contains("two"));
 }
 
 #[test]
 fn respect_gitignore_config_default_enables_pruning_without_flag() {
     let temp = tempdir().expect("tempdir should exist");
     let home = temp.path().join("home");
-    fs::create_dir_all(home.join(".config/soupify")).expect("config dir should be created");
+    fs::create_dir_all(home.join(".config/slop")).expect("config dir should be created");
     fs::write(
-        home.join(".config/soupify/config.yaml"),
+        home.join(".config/slop/config.yaml"),
         "respect_gitignore: true\n",
     )
     .expect("config should be written");
@@ -590,8 +590,8 @@ fn respect_gitignore_config_default_enables_pruning_without_flag() {
         .assert()
         .success();
 
-    let soup = fs::read_to_string(output_dir.join("file1_gitignore.md"))
-        .expect("soup file should exist");
-    assert!(soup.contains("one"));
-    assert!(!soup.contains("two"));
+    let slop = fs::read_to_string(output_dir.join("file1_gitignore.md"))
+        .expect("slop file should exist");
+    assert!(slop.contains("one"));
+    assert!(!slop.contains("two"));
 }

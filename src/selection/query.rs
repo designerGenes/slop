@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use super::index;
 use super::SelectionReason;
-use crate::error::SoupifyError;
+use crate::error::SlopError;
 
 pub fn run_match_query(
     index: &tantivy::Index,
@@ -10,7 +10,7 @@ pub fn run_match_query(
     fields: &index::IndexFields,
     terms: &[String],
     top_k: usize,
-) -> Result<Vec<super::ScoredPath>, SoupifyError> {
+) -> Result<Vec<super::ScoredPath>, SlopError> {
     if terms.is_empty() {
         return Ok(Vec::new());
     }
@@ -42,7 +42,7 @@ pub fn run_task_query(
     fields: &index::IndexFields,
     task: &str,
     top_k: usize,
-) -> Result<Vec<super::ScoredPath>, SoupifyError> {
+) -> Result<Vec<super::ScoredPath>, SlopError> {
     let results = index::query_index(index, reader, fields, task, top_k)?;
 
     let mut scored: Vec<super::ScoredPath> = results

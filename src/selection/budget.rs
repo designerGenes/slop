@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use super::ScoredPath;
-use crate::error::SoupifyError;
+use crate::error::SlopError;
 
 pub const MAP_OVERHEAD: usize = 512;
 pub const HEADER_RESERVE: usize = 1024;
@@ -15,7 +15,7 @@ pub fn estimate_block_bytes(path: &Path) -> usize {
     let content_len = content.len();
     let path_str = path.to_string_lossy();
     let header_len = format!(
-        "#SOUP \"{}\" #SOUPED_LINES {} #SOUP_TRAILING_NEWLINE {}\n",
+        "#SLOP \"{}\" #SLOPED_LINES {} #SLOP_TRAILING_NEWLINE {}\n",
         path_str,
         content_len / 80,
         1
@@ -26,11 +26,11 @@ pub fn estimate_block_bytes(path: &Path) -> usize {
 
 pub fn fill_budget(
     candidates: &[ScoredPath],
-    max_soup_bytes: usize,
+    max_slop_bytes: usize,
     map_reserve_bytes: usize,
     top_k: usize,
-) -> Result<(Vec<ScoredPath>, Vec<ScoredPath>), SoupifyError> {
-    let budget = max_soup_bytes
+) -> Result<(Vec<ScoredPath>, Vec<ScoredPath>), SlopError> {
+    let budget = max_slop_bytes
         .saturating_sub(map_reserve_bytes)
         .saturating_sub(HEADER_RESERVE);
 
@@ -42,10 +42,10 @@ pub fn fill_budget(
         let blk = estimate_block_bytes(&candidate.path);
 
         if selected.is_empty() && running_total + blk > budget {
-            return Err(SoupifyError::SoupBudgetExceeded {
+            return Err(SlopError::SoupBudgetExceeded {
                 path: candidate.path.clone(),
                 bytes: blk + map_reserve_bytes,
-                cap: max_soup_bytes,
+                cap: max_slop_bytes,
             });
         }
 
@@ -63,10 +63,10 @@ pub fn fill_budget(
 pub fn enforce_actual_budget(
     selected: &mut Vec<ScoredPath>,
     dropped: &mut Vec<ScoredPath>,
-    actual_soup_bytes: usize,
-    max_soup_bytes: usize,
+    actual_slop_bytes: usize,
+    max_slop_bytes: usize,
 ) {
-    while actual_soup_bytes > max_soup_bytes && selected.len() > 1 {
+    while actual_slop_bytes > max_slop_bytes && selected.len() > 1 {
         let last = selected.pop().unwrap();
         dropped.push(last);
     }

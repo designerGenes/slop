@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use soupify::models::{SoupBlock, SoupPartialRange, SourceFile};
-use soupify::soup_format::{analyze_contents, parse_document, serialize_document};
+use slop::models::{SoupBlock, SoupPartialRange, SourceFile};
+use slop::slop_format::{analyze_contents, parse_document, serialize_document};
 
 fn source_file(path: &str, contents: &str) -> SourceFile {
     let (logical_line_count, trailing_newline) = analyze_contents(contents);
@@ -59,17 +59,17 @@ fn round_trips_multi_line_file_ending_with_blank_line() {
 }
 
 #[test]
-fn round_trips_content_with_soup_prefix_lines() {
+fn round_trips_content_with_slop_prefix_lines() {
     assert_eq!(
-        round_trip("#SOUP should stay literal\nnext line\n"),
-        "#SOUP should stay literal\nnext line\n"
+        round_trip("#SLOP should stay literal\nnext line\n"),
+        "#SLOP should stay literal\nnext line\n"
     );
 }
 
 #[test]
 fn parses_partial_block_metadata() {
     let parsed = parse_document(
-        "#SOUP \"/tmp/file.txt\" #SOUP_PARTIAL_LINES 4-5 #SOUPED_LINES 2 #SOUP_TRAILING_NEWLINE 0\nupdated\nlines",
+        "#SLOP \"/tmp/file.txt\" #SLOP_PARTIAL_LINES 4-5 #SLOPED_LINES 2 #SLOP_TRAILING_NEWLINE 0\nupdated\nlines",
     )
     .expect("document should parse");
 

@@ -5,33 +5,33 @@ use predicates::str::contains;
 use tempfile::tempdir;
 
 fn cargo_bin() -> Command {
-    Command::cargo_bin("soupify").expect("binary should build")
+    Command::cargo_bin("slop").expect("binary should build")
 }
 
 #[test]
-fn desoupify_applies_mixed_full_and_partial_blocks() {
+fn deslop_applies_mixed_full_and_partial_blocks() {
     let temp = tempdir().expect("tempdir should exist");
     let full_path = temp.path().join("full.txt");
     let partial_path = temp.path().join("partial.txt");
-    let soup_file = temp.path().join("archive.soup");
+    let slop_file = temp.path().join("archive.slop");
 
     fs::write(&partial_path, "one\ntwo\nthree\nfour\n").expect("seed file should be written");
     fs::write(
-        &soup_file,
+        &slop_file,
         format!(
             concat!(
-                "#SOUP \"{}\" #SOUPED_LINES 2 #SOUP_TRAILING_NEWLINE 1\n",
+                "#SLOP \"{}\" #SLOPED_LINES 2 #SLOP_TRAILING_NEWLINE 1\n",
                 "fresh\nfile\n",
-                "#SOUP \"{}\" #SOUP_PARTIAL_LINES 2-3 #SOUPED_LINES 2 #SOUP_TRAILING_NEWLINE 1\n",
+                "#SLOP \"{}\" #SLOP_PARTIAL_LINES 2-3 #SLOPED_LINES 2 #SLOP_TRAILING_NEWLINE 1\n",
                 "dos\nthree updated"
             ),
             full_path.display(),
             partial_path.display()
         ),
     )
-    .expect("soup file should be written");
+    .expect("slop file should be written");
 
-    cargo_bin().args(["-d"]).arg(&soup_file).assert().success();
+    cargo_bin().args(["-d"]).arg(&slop_file).assert().success();
 
     assert_eq!(
         fs::read_to_string(&full_path).expect("full file should be restored"),
@@ -44,28 +44,28 @@ fn desoupify_applies_mixed_full_and_partial_blocks() {
 }
 
 #[test]
-fn desoupify_applies_multiple_partial_blocks_in_order() {
+fn deslop_applies_multiple_partial_blocks_in_order() {
     let temp = tempdir().expect("tempdir should exist");
     let path = temp.path().join("ordered.txt");
-    let soup_file = temp.path().join("ordered.soup");
+    let slop_file = temp.path().join("ordered.slop");
 
     fs::write(&path, "alpha\nbeta\ngamma\ndelta\n").expect("seed file should be written");
     fs::write(
-        &soup_file,
+        &slop_file,
         format!(
             concat!(
-                "#SOUP \"{}\" #SOUP_PARTIAL_LINES 2-2 #SOUPED_LINES 1 #SOUP_TRAILING_NEWLINE 1\n",
+                "#SLOP \"{}\" #SLOP_PARTIAL_LINES 2-2 #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 1\n",
                 "beta updated\n",
-                "#SOUP \"{}\" #SOUP_PARTIAL_LINES 3-4 #SOUPED_LINES 2 #SOUP_TRAILING_NEWLINE 0\n",
+                "#SLOP \"{}\" #SLOP_PARTIAL_LINES 3-4 #SLOPED_LINES 2 #SLOP_TRAILING_NEWLINE 0\n",
                 "gamma updated\nomega"
             ),
             path.display(),
             path.display()
         ),
     )
-    .expect("soup file should be written");
+    .expect("slop file should be written");
 
-    cargo_bin().args(["-d"]).arg(&soup_file).assert().success();
+    cargo_bin().args(["-d"]).arg(&slop_file).assert().success();
 
     assert_eq!(
         fs::read_to_string(&path).expect("file should be updated"),
@@ -74,51 +74,51 @@ fn desoupify_applies_multiple_partial_blocks_in_order() {
 }
 
 #[test]
-fn desoupify_reports_partial_ranges_that_exceed_existing_file_length() {
+fn deslop_reports_partial_ranges_that_exceed_existing_file_length() {
     let temp = tempdir().expect("tempdir should exist");
     let path = temp.path().join("short.txt");
-    let soup_file = temp.path().join("broken.soup");
+    let slop_file = temp.path().join("broken.slop");
 
     fs::write(&path, "one\ntwo\n").expect("seed file should be written");
     fs::write(
-        &soup_file,
+        &slop_file,
         format!(
-            "#SOUP \"{}\" #SOUP_PARTIAL_LINES 2-4 #SOUPED_LINES 1 #SOUP_TRAILING_NEWLINE 1\nreplaced",
+            "#SLOP \"{}\" #SLOP_PARTIAL_LINES 2-4 #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 1\nreplaced",
             path.display()
         ),
     )
-    .expect("soup file should be written");
+    .expect("slop file should be written");
 
     cargo_bin()
         .args(["-d"])
-        .arg(&soup_file)
+        .arg(&slop_file)
         .assert()
         .failure()
-        .stderr(contains("partial soup range 2-4 exceeds existing file length 2"));
+        .stderr(contains("partial slop range 2-4 exceeds existing file length 2"));
 }
 
 #[test]
-fn desoupify_applies_partial_block_despite_base_sha_drift() {
+fn deslop_applies_partial_block_despite_base_sha_drift() {
     let temp = tempdir().expect("tempdir should exist");
     let path = temp.path().join("drifted.txt");
-    let soup_file = temp.path().join("round2.soup");
+    let slop_file = temp.path().join("round2.slop");
 
     fs::write(&path, "round1\nseed\ncontent\n").expect("post-round-1 file should be written");
 
     let stale_sha = "0".repeat(64);
     fs::write(
-        &soup_file,
+        &slop_file,
         format!(
-            "#SOUP \"{}\" #SOUP_PARTIAL_LINES 2-2 #SOUPED_LINES 1 #SOUP_TRAILING_NEWLINE 1 #SOUP_BASE_SHA {}\nupdated line two",
+            "#SLOP \"{}\" #SLOP_PARTIAL_LINES 2-2 #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 1 #SLOP_BASE_SHA {}\nupdated line two",
             path.display(),
             stale_sha
         ),
     )
-    .expect("soup file should be written");
+    .expect("slop file should be written");
 
     cargo_bin()
         .args(["-d"])
-        .arg(&soup_file)
+        .arg(&slop_file)
         .assert()
         .success()
         .stderr(contains("base SHA drift"));
@@ -130,29 +130,29 @@ fn desoupify_applies_partial_block_despite_base_sha_drift() {
 }
 
 #[test]
-fn desoupify_partial_block_is_idempotent_across_runs() {
+fn deslop_partial_block_is_idempotent_across_runs() {
     let temp = tempdir().expect("tempdir should exist");
     let path = temp.path().join("source.md");
-    let soup_file = temp.path().join("changes.soup");
+    let slop_file = temp.path().join("changes.slop");
 
     fs::write(&path, "line1\nline2\nline3\nline4\n").expect("seed file should be written");
     fs::write(
-        &soup_file,
+        &slop_file,
         format!(
             concat!(
-                "#SOUP \"{}\" #SOUP_PARTIAL_LINES 2-3 #SOUPED_LINES 3 #SOUP_TRAILING_NEWLINE 1\n",
+                "#SLOP \"{}\" #SLOP_PARTIAL_LINES 2-3 #SLOPED_LINES 3 #SLOP_TRAILING_NEWLINE 1\n",
                 "line2 changed\nline3 changed\nline 3.1 new line!"
             ),
             path.display()
         ),
     )
-    .expect("soup file should be written");
+    .expect("slop file should be written");
 
     let expected = "line1\nline2 changed\nline3 changed\nline 3.1 new line!\nline4\n";
 
     cargo_bin()
         .args(["-d"])
-        .arg(&soup_file)
+        .arg(&slop_file)
         .assert()
         .success();
 
@@ -161,10 +161,10 @@ fn desoupify_partial_block_is_idempotent_across_runs() {
         expected
     );
 
-    // Forgetfully re-run desoupify against the same soup document.
+    // Forgetfully re-run deslop against the same slop document.
     cargo_bin()
         .args(["-d"])
-        .arg(&soup_file)
+        .arg(&slop_file)
         .assert()
         .success()
         .stderr(contains("already applied"));
@@ -172,6 +172,6 @@ fn desoupify_partial_block_is_idempotent_across_runs() {
     assert_eq!(
         fs::read_to_string(&path).expect("file should be unchanged after second run"),
         expected,
-        "second desoupify run must not corrupt the already-updated file"
+        "second deslop run must not corrupt the already-updated file"
     );
 }

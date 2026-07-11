@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliArgs {
-    pub desoupify: bool,
+    pub deslop: bool,
     pub show_output_dir: bool,
     pub output_dir: Option<PathBuf>,
     pub recursive: bool,
@@ -10,7 +10,7 @@ pub struct CliArgs {
     pub exclude: Vec<String>,
     pub respect_gitignore: bool,
     pub include_graph: bool,
-    pub soupify_to: Option<PathBuf>,
+    pub slop_to: Option<PathBuf>,
     pub graph_format: Option<String>,
     pub graph_map_tokens: Option<usize>,
     pub matches: Vec<String>,
@@ -19,7 +19,7 @@ pub struct CliArgs {
     pub symbols: Vec<String>,
     pub task: Option<String>,
     pub top_k: Option<usize>,
-    pub max_soup_bytes: Option<usize>,
+    pub max_slop_bytes: Option<usize>,
     pub reindex: bool,
     pub explain_selection: bool,
     pub dry_run: bool,

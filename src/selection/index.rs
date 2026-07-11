@@ -5,7 +5,7 @@ use tantivy::tokenizer::{Token, TokenStream, Tokenizer};
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
 
 use crate::config::Config;
-use crate::error::SoupifyError;
+use crate::error::SlopError;
 
 pub const CODE_TOKENIZER_NAME: &str = "code";
 
@@ -154,7 +154,7 @@ pub fn resolve_index_dir(config: &Config) -> PathBuf {
         .unwrap_or_else(|| {
             PathBuf::from(std::env::var("HOME").unwrap_or_default())
                 .join(".cache")
-                .join("soupify")
+                .join("slop")
                 .join("index")
         })
 }
@@ -163,13 +163,13 @@ pub fn ensure_index(
     corpus_root: &Path,
     config: &Config,
     force_reindex: bool,
-) -> Result<(Index, IndexReader, IndexFields), SoupifyError> {
+) -> Result<(Index, IndexReader, IndexFields), SlopError> {
     let index_base = resolve_index_dir(config);
     let fingerprint = corpus_fingerprint(corpus_root);
     let index_path = index_base.join(&fingerprint);
 
     std::fs::create_dir_all(&index_path).map_err(|e| {
-        SoupifyError::IndexBuildFailure(format!("mkdir {}: {}", index_path.display(), e))
+        SlopError::IndexBuildFailure(format!("mkdir {}: {}", index_path.display(), e))
     })?;
 
     let (schema, fields) = IndexFields::build_schema();
@@ -177,7 +177,7 @@ pub fn ensure_index(
     let index = Index::open_in_dir(&index_path)
         .or_else(|_| Index::create_in_dir(&index_path, schema.clone()))
         .map_err(|e| {
-            SoupifyError::IndexBuildFailure(format!("open_or_create: {}", e))
+            SlopError::IndexBuildFailure(format!("open_or_create: {}", e))
         })?;
 
     index
@@ -185,12 +185,12 @@ pub fn ensure_index(
         .register(CODE_TOKENIZER_NAME, CodeTokenizer);
 
     let mut writer = index.writer(50_000_000).map_err(|e| {
-        SoupifyError::IndexBuildFailure(format!("writer: {}", e))
+        SlopError::IndexBuildFailure(format!("writer: {}", e))
     })?;
 
     if force_reindex {
         writer.delete_all_documents().map_err(|e| {
-            SoupifyError::IndexBuildFailure(format!("delete_all: {}", e))
+            SlopError::IndexBuildFailure(format!("delete_all: {}", e))
         })?;
         index_corpus(&mut writer, &fields, corpus_root)?;
     } else {
@@ -201,7 +201,7 @@ pub fn ensure_index(
         .reader_builder()
         .reload_policy(ReloadPolicy::OnCommitWithDelay)
         .try_into()
-        .map_err(|e| SoupifyError::IndexBuildFailure(format!("reader: {}", e)))?;
+        .map_err(|e| SlopError::IndexBuildFailure(format!("reader: {}", e)))?;
 
     Ok((index, reader, fields))
 }
@@ -210,13 +210,13 @@ fn index_corpus(
     writer: &mut IndexWriter,
     fields: &IndexFields,
     corpus_root: &Path,
-) -> Result<(), SoupifyError> {
+) -> Result<(), SlopError> {
     let files = crate::repomap::discover_source_files(corpus_root);
     for file_path in &files {
         index_file(writer, fields, corpus_root, Path::new(file_path))?;
     }
     writer.commit().map_err(|e| {
-        SoupifyError::IndexBuildFailure(format!("commit: {}", e))
+        SlopError::IndexBuildFailure(format!("commit: {}", e))
     })?;
     Ok(())
 }
@@ -226,11 +226,11 @@ fn incremental_update(
     writer: &mut IndexWriter,
     fields: &IndexFields,
     corpus_root: &Path,
-) -> Result<(), SoupifyError> {
+) -> Result<(), SlopError> {
     let files = crate::repomap::discover_source_files(corpus_root);
 
     let reader = index.reader().map_err(|e| {
-        SoupifyError::IndexBuildFailure(format!("reader for update: {}", e))
+        SlopError::IndexBuildFailure(format!("reader for update: {}", e))
     })?;
     let searcher = reader.searcher();
 
@@ -260,7 +260,7 @@ fn incremental_update(
     }
 
     writer.commit().map_err(|e| {
-        SoupifyError::IndexBuildFailure(format!("commit: {}", e))
+        SlopError::IndexBuildFailure(format!("commit: {}", e))
     })?;
     Ok(())
 }
@@ -303,7 +303,7 @@ fn index_file(
     fields: &IndexFields,
     corpus_root: &Path,
     file_path: &Path,
-) -> Result<(), SoupifyError> {
+) -> Result<(), SlopError> {
     let abs_str = file_path.to_string_lossy().to_string();
     let rel_path = file_path
         .strip_prefix(corpus_root)
@@ -340,7 +340,7 @@ fn index_file(
             fields.mtime => mtime,
             fields.size => size,
         ))
-        .map_err(|e| SoupifyError::IndexBuildFailure(format!("add_doc: {}", e)))?;
+        .map_err(|e| SlopError::IndexBuildFailure(format!("add_doc: {}", e)))?;
 
     Ok(())
 }
@@ -351,7 +351,7 @@ pub fn query_index(
     fields: &IndexFields,
     query_text: &str,
     top_k: usize,
-) -> Result<Vec<(f32, String, String)>, SoupifyError> {
+) -> Result<Vec<(f32, String, String)>, SlopError> {
     use tantivy::collector::TopDocs;
     use tantivy::query::QueryParser;
 
@@ -360,18 +360,18 @@ pub fn query_index(
 
     let query = query_parser
         .parse_query(query_text)
-        .map_err(|e| SoupifyError::RetrievalQueryFailure(format!("parse: {}", e)))?;
+        .map_err(|e| SlopError::RetrievalQueryFailure(format!("parse: {}", e)))?;
 
     let searcher = reader.searcher();
     let top_docs = searcher
         .search(&query, &TopDocs::with_limit(top_k * 4))
-        .map_err(|e| SoupifyError::RetrievalQueryFailure(format!("search: {}", e)))?;
+        .map_err(|e| SlopError::RetrievalQueryFailure(format!("search: {}", e)))?;
 
     let mut results = Vec::new();
     for (score, doc_addr) in top_docs {
         let doc: TantivyDocument = searcher
             .doc(doc_addr)
-            .map_err(|e| SoupifyError::RetrievalQueryFailure(format!("doc: {}", e)))?;
+            .map_err(|e| SlopError::RetrievalQueryFailure(format!("doc: {}", e)))?;
         let path = doc
             .get_first(fields.path)
             .and_then(|v| match v {
