@@ -1,3 +1,10 @@
+```
+     ▗▟████▙▖    ▗▟███▖  ▐█▌     ▗▟███▙▖  ▗▟███▙▖
+   ▗▟██▀██▀██▙▖  ▐▛▀▀▀▘  ▐█▌     ▐█▌ ▐█▌  ▐█▌ ▐█▌
+   ▐████▄▄████▌  ▝▀▀██▖  ▐█▌     ▐█▌ ▐█▌  ▐████▛▘
+   ▝▜████████▛▘  ▝███▛▘  ▐████▖  ▝▜███▛▘  ▐█▌
+```
+
 # slop
 
 A CLI tool that bundles source files into a single Markdown file for transmission to AI systems, then restores the AI's edits back to disk.

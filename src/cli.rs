@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use clap::error::ErrorKind;
 use clap::Parser;
 
 use crate::error::SlopError;
@@ -9,7 +10,8 @@ use crate::models::CliArgs;
 #[command(
     name = "slop",
     version,
-    about = "Combine files into a markdown slop"
+    about = "Combine files into a markdown slop",
+    before_help = crate::logo::LOGO,
 )]
 struct RawCliArgs {
     #[arg(short = 'o', long = "output")]
@@ -60,6 +62,8 @@ struct RawCliArgs {
     redact: bool,
     #[arg(long = "context-file", value_name = "FILE")]
     context_files: Vec<PathBuf>,
+    #[arg(long = "silent", short = 'S')]
+    silent: bool,
     #[arg(value_name = "INPUT", required = true)]
     inputs: Vec<PathBuf>,
 }
@@ -74,7 +78,15 @@ where
     T: Into<std::ffi::OsString> + Clone,
 {
     let parsed = RawCliArgs::try_parse_from(args)
-        .map_err(|error| SlopError::InvalidCliUsage(error.to_string()))?;
+        .map_err(|error| {
+            match error.kind() {
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+                    let _ = error.print();
+                    std::process::exit(0);
+                }
+                _ => SlopError::InvalidCliUsage(error.to_string()),
+            }
+        })?;
 
     if parsed.inputs.is_empty() {
         return Err(SlopError::InvalidCliUsage(
@@ -114,6 +126,7 @@ where
         allow_secrets: parsed.allow_secrets,
         redact: parsed.redact,
         context_files: parsed.context_files,
+        silent: parsed.silent,
     })
 }
 

@@ -3,6 +3,7 @@ pub mod config;
 pub mod deslop;
 pub mod error;
 pub mod graph;
+pub mod logo;
 pub mod models;
 pub mod open;
 pub mod pathing;
@@ -25,9 +26,15 @@ pub fn run() -> Result<(), SlopError> {
     let args = parse_cli_args()?;
     let config = load_config();
 
+    if !args.silent {
+        logo::print_logo();
+    }
+
     // Sync Sharktopus rules on every invocation so config changes propagate.
     if let Err(error) = sync() {
-        eprintln!("warning: failed to sync Sharktopus rules: {error}");
+        if !args.silent {
+            eprintln!("warning: failed to sync Sharktopus rules: {error}");
+        }
     }
 
     run_with_opener(&args, &config, &SystemOutputDirOpener)

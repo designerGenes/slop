@@ -27,6 +27,7 @@ pub struct CliArgs {
     pub allow_secrets: bool,
     pub redact: bool,
     pub context_files: Vec<PathBuf>,
+    pub silent: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
