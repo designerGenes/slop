@@ -4,14 +4,15 @@ use std::path::PathBuf;
 use crate::config::Config;
 use crate::error::SlopError;
 use crate::graph;
-use crate::models::{CliArgs, SoupMetaBlock, SourceFile};
+use crate::models::{CliArgs, IgnoreReason, IgnoredEntry, SoupMetaBlock, SourceFile};
 use crate::pathing::{
-    build_output_filename, collect_source_files, filename_token, resolve_absolute,
+    build_output_filename, collect_source_files_reporting, filename_token, resolve_absolute,
     resolve_output_dir, should_respect_gitignore,
 };
 use crate::secrets;
 use crate::selection;
 use crate::slop_format::{analyze_contents, serialize_document};
+use crate::tree;
 
 pub fn run_slop(args: &CliArgs, config: &Config) -> Result<PathBuf, SlopError> {
     let cwd = std::env::current_dir().map_err(|error| SlopError::FileReadFailure {
@@ -40,8 +41,14 @@ pub fn run_slop(args: &CliArgs, config: &Config) -> Result<PathBuf, SlopError> {
 
     let max_depth = if args.recursive { Some(usize::MAX) } else { Some(0) };
     let respect_gitignore = should_respect_gitignore(args.respect_gitignore, config);
-    let candidate_files =
-        collect_source_files(&resolved_inputs, max_depth, &args.exclude, respect_gitignore)?;
+    let walk = collect_source_files_reporting(
+        &resolved_inputs,
+        max_depth,
+        &args.exclude,
+        respect_gitignore,
+    )?;
+    let candidate_files = walk.files;
+    let ignored_entries = walk.ignored;
     if candidate_files.is_empty() {
         return Err(SlopError::InputExpandedToZeroFiles);
     }
@@ -87,6 +94,11 @@ pub fn run_slop(args: &CliArgs, config: &Config) -> Result<PathBuf, SlopError> {
         (candidate_files, Vec::new())
     };
 
+    let verbose = args.verbose || config.verbose_output;
+    if !args.silent {
+        print_slop_tree(&resolved_inputs, &files, &ignored_entries, verbose);
+    }
+
     let source_files = files
         .iter()
         .map(build_source_file)
@@ -122,12 +134,72 @@ pub fn run_slop(args: &CliArgs, config: &Config) -> Result<PathBuf, SlopError> {
     })?;
 
     let output_file = output_dir.join(build_output_filename(&files, !meta_blocks.is_empty())?);
+    let written_bytes = markdown.len() as u64;
     fs::write(&output_file, markdown).map_err(|error| SlopError::FileWriteFailure {
         path: output_file.clone(),
         source: error,
     })?;
 
+    if !args.silent {
+        let size = fs::metadata(&output_file)
+            .map(|metadata| metadata.len())
+            .unwrap_or(written_bytes);
+        eprintln!();
+        eprintln!(
+            "Slop file written is {} and was written to:",
+            tree::format_size(size)
+        );
+        eprintln!("{}", output_file.display());
+    }
+
     Ok(output_file)
+}
+
+/// Anchor the tree at the directory the user actually pointed slop at, so
+/// `slop -r .` shows the project root even when every match happens to sit in
+/// one deep subdirectory. Anything else (several inputs, a single file) falls
+/// back to the deepest shared directory.
+fn tree_root(inputs: &[PathBuf], all: &[PathBuf]) -> PathBuf {
+    if inputs.len() == 1 && inputs[0].is_dir() {
+        return inputs[0].clone();
+    }
+    tree::common_root(all)
+}
+
+/// Print the run report: every file going into the slop, as a tree. With
+/// `verbose`, `.slopignore` casualties are shown in place and tagged.
+///
+/// This goes to stderr, alongside the logo and the warnings, so that stdout
+/// stays free for machine consumption.
+fn print_slop_tree(
+    inputs: &[PathBuf],
+    files: &[PathBuf],
+    ignored: &[IgnoredEntry],
+    verbose: bool,
+) {
+    let mut all: Vec<PathBuf> = files.to_vec();
+    if verbose {
+        all.extend(ignored.iter().map(|entry| entry.path.clone()));
+    }
+
+    let root = tree_root(inputs, &all);
+    eprintln!("Slopifying...");
+    eprint!(
+        "{}",
+        tree::render_walk_tree(&root, files, ignored, verbose, tree::colors_enabled())
+    );
+
+    // `-x/--exclude` needs no explanation — the user typed it. A .slopignore
+    // sitting in the repo is the surprising one, so nudge about that only.
+    let slopignored = ignored
+        .iter()
+        .filter(|entry| entry.reason == IgnoreReason::SlopIgnore)
+        .count();
+    if !verbose && slopignored > 0 {
+        eprintln!(
+            "({slopignored} path(s) skipped by .slopignore; re-run with --verbose to list them)"
+        );
+    }
 }
 
 fn build_graph_meta_blocks(

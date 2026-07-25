@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use ignore::WalkBuilder;
 use regex::Regex;
@@ -8,6 +9,13 @@ use walkdir::WalkDir;
 
 use crate::config::Config;
 use crate::error::SlopError;
+use crate::models::{IgnoreReason, IgnoredEntry, WalkReport};
+use crate::slopignore::SlopIgnore;
+
+/// Shared sink for `.slopignore` hits. The `ignore` crate requires its
+/// `filter_entry` closure to be `Fn + Send + Sync + 'static`, so the sink and
+/// the matcher both have to be owned by the closure rather than borrowed.
+type IgnoredSink = Arc<Mutex<Vec<IgnoredEntry>>>;
 
 // VCS/build/output trees are never useful in a slop and routinely hold
 // binary blobs (git loose objects, compiled artifacts) that would abort
@@ -194,12 +202,27 @@ pub fn collect_source_files(
     exclude: &[String],
     respect_gitignore: bool,
 ) -> Result<Vec<PathBuf>, SlopError> {
+    Ok(collect_source_files_reporting(inputs, max_depth, exclude, respect_gitignore)?.files)
+}
+
+/// Like [`collect_source_files`], but also reports what `.slopignore` pruned
+/// so `--verbose` can explain the absences.
+pub fn collect_source_files_reporting(
+    inputs: &[PathBuf],
+    max_depth: Option<usize>,
+    exclude: &[String],
+    respect_gitignore: bool,
+) -> Result<WalkReport, SlopError> {
     let mut seen = BTreeSet::new();
     let mut files = Vec::new();
+    let ignored: IgnoredSink = Arc::new(Mutex::new(Vec::new()));
     let exclusion_matcher = ExclusionMatcher::new(exclude);
 
     for input in inputs {
         let depth = max_depth.unwrap_or(0);
+        // Discovered per input: two inputs can sit in different repos, each
+        // with its own .slopignore.
+        let slopignore = Arc::new(SlopIgnore::discover(input));
         collect_path(
             input,
             &mut seen,
@@ -207,11 +230,31 @@ pub fn collect_source_files(
             depth,
             &exclusion_matcher,
             respect_gitignore,
+            &slopignore,
+            &ignored,
         )?;
     }
 
     files.sort_by(compare_paths_for_output);
-    Ok(files)
+
+    let mut ignored = ignored
+        .lock()
+        .map(|entries| entries.clone())
+        .unwrap_or_default();
+    ignored.sort_by(|left, right| compare_paths_for_output(&left.path, &right.path));
+    ignored.dedup_by(|left, right| left.path == right.path);
+
+    Ok(WalkReport { files, ignored })
+}
+
+fn record_ignored(sink: &IgnoredSink, path: &Path, is_dir: bool, reason: IgnoreReason) {
+    if let Ok(mut entries) = sink.lock() {
+        entries.push(IgnoredEntry {
+            path: path.to_path_buf(),
+            is_dir,
+            reason,
+        });
+    }
 }
 
 pub fn build_output_filename(files: &[PathBuf], has_graph: bool) -> Result<String, SlopError> {
@@ -269,6 +312,7 @@ pub fn filename_token(path: &Path) -> Result<String, SlopError> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_path(
     input: &Path,
     seen: &mut BTreeSet<PathBuf>,
@@ -276,6 +320,8 @@ fn collect_path(
     max_depth: usize,
     exclusion_matcher: &ExclusionMatcher,
     respect_gitignore: bool,
+    slopignore: &Arc<SlopIgnore>,
+    ignored: &IgnoredSink,
 ) -> Result<(), SlopError> {
     let metadata = fs::symlink_metadata(input).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -293,11 +339,11 @@ fn collect_path(
         return Err(SlopError::UnsupportedFileType(input.to_path_buf()));
     }
 
+    // A file named explicitly on the command line is always slopped:
+    // .slopignore governs directory walks, not deliberate requests.
     if metadata.is_file() {
-        if !exclusion_matcher.should_exclude(input) {
-            if seen.insert(input.to_path_buf()) {
-                files.push(input.to_path_buf());
-            }
+        if !exclusion_matcher.should_exclude(input) && seen.insert(input.to_path_buf()) {
+            files.push(input.to_path_buf());
         }
         return Ok(());
     }
@@ -311,9 +357,19 @@ fn collect_path(
                 files,
                 max_depth,
                 exclusion_matcher,
+                slopignore,
+                ignored,
             );
         }
-        return collect_dir(input, seen, files, max_depth, exclusion_matcher);
+        return collect_dir(
+            input,
+            seen,
+            files,
+            max_depth,
+            exclusion_matcher,
+            slopignore,
+            ignored,
+        );
     }
 
     Err(SlopError::UnsupportedFileType(input.to_path_buf()))
@@ -349,7 +405,7 @@ fn max_allowed_depth(max_depth: usize, input: &Path) -> usize {
 /// Both a `.git` directory and a `.git` file (gitlink/submodule) count, so
 /// this also works for worktrees and submodules. Symlinks are not followed
 /// on the climb, matching how `ignore::WalkBuilder` resolves parent paths.
-fn containing_git_root(input: &Path) -> Option<PathBuf> {
+pub(crate) fn containing_git_root(input: &Path) -> Option<PathBuf> {
     let start = input
         .canonicalize()
         .unwrap_or_else(|_| input.to_path_buf());
@@ -370,21 +426,37 @@ fn collect_dir(
     files: &mut Vec<PathBuf>,
     max_depth: usize,
     exclusion_matcher: &ExclusionMatcher,
+    slopignore: &Arc<SlopIgnore>,
+    ignored: &IgnoredSink,
 ) -> Result<(), SlopError> {
     // Use WalkDir but limit depth if max_depth is 0 (shallow) or usize::MAX (full)
     // max_depth of 0 means immediate children only (depth 1 from input)
     // max_depth of usize::MAX means full recursion
     let base_depth = input.components().count();
+    let filter_slopignore = Arc::clone(slopignore);
+    let filter_ignored = Arc::clone(ignored);
     let walker = WalkDir::new(input)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|entry| {
+        .filter_entry(move |entry| {
             if entry.depth() == 0 {
                 return true;
             }
-            if entry.file_type().is_dir() {
+            let is_dir = entry.file_type().is_dir();
+            if is_dir {
                 let name = entry.file_name().to_string_lossy();
-                return !SKIP_DIRS.contains(&name.as_ref());
+                if SKIP_DIRS.contains(&name.as_ref()) {
+                    return false;
+                }
+            }
+            if filter_slopignore.is_ignored(entry.path(), is_dir) {
+                record_ignored(
+                    &filter_ignored,
+                    entry.path(),
+                    is_dir,
+                    IgnoreReason::SlopIgnore,
+                );
+                return false;
             }
             true
         });
@@ -428,7 +500,11 @@ fn collect_dir(
             return Err(SlopError::UnsupportedFileType(entry_path.to_path_buf()));
         }
 
-        if entry_metadata.is_file() && !exclusion_matcher.should_exclude(entry_path) {
+        if entry_metadata.is_file() {
+            if exclusion_matcher.should_exclude(entry_path) {
+                record_ignored(ignored, entry_path, false, IgnoreReason::Exclude);
+                continue;
+            }
             if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
                 if SKIP_EXTS.contains(&ext) {
                     continue;
@@ -473,6 +549,8 @@ fn collect_dir_respecting_gitignore(
     files: &mut Vec<PathBuf>,
     max_depth: usize,
     exclusion_matcher: &ExclusionMatcher,
+    slopignore: &Arc<SlopIgnore>,
+    ignored: &IgnoredSink,
 ) -> Result<(), SlopError> {
     let max_allowed = max_allowed_depth(max_depth, input);
 
@@ -493,15 +571,31 @@ fn collect_dir_respecting_gitignore(
         .git_global(false) // scope strictly to the repo's own .gitignore, not the user's machine-wide config
         .git_exclude(false) // scope strictly to .gitignore, not .git/info/exclude
         .require_git(inside_git_repo) // bound the parent climb at the nearest `.git`
-        .filter_entry(|entry| {
-            if entry.depth() == 0 {
-                return true;
+        .filter_entry({
+            let filter_slopignore = Arc::clone(slopignore);
+            let filter_ignored = Arc::clone(ignored);
+            move |entry| {
+                if entry.depth() == 0 {
+                    return true;
+                }
+                let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+                if is_dir {
+                    let name = entry.file_name().to_string_lossy();
+                    if SKIP_DIRS.contains(&name.as_ref()) {
+                        return false;
+                    }
+                }
+                if filter_slopignore.is_ignored(entry.path(), is_dir) {
+                    record_ignored(
+                        &filter_ignored,
+                        entry.path(),
+                        is_dir,
+                        IgnoreReason::SlopIgnore,
+                    );
+                    return false;
+                }
+                true
             }
-            if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-                let name = entry.file_name().to_string_lossy();
-                return !SKIP_DIRS.contains(&name.as_ref());
-            }
-            true
         });
 
     for entry in builder.build() {
@@ -532,7 +626,11 @@ fn collect_dir_respecting_gitignore(
             return Err(SlopError::UnsupportedFileType(entry_path.to_path_buf()));
         }
 
-        if entry_metadata.is_file() && !exclusion_matcher.should_exclude(entry_path) {
+        if entry_metadata.is_file() {
+            if exclusion_matcher.should_exclude(entry_path) {
+                record_ignored(ignored, entry_path, false, IgnoreReason::Exclude);
+                continue;
+            }
             if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
                 if SKIP_EXTS.contains(&ext) {
                     continue;
@@ -656,10 +754,11 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        build_output_filename, collect_source_files, filename_token, resolve_absolute,
-        should_respect_gitignore,
+        build_output_filename, collect_source_files, collect_source_files_reporting,
+        filename_token, resolve_absolute, should_respect_gitignore,
     };
     use crate::config::Config;
+    use crate::models::IgnoreReason;
 
     #[test]
     fn resolves_relative_inputs_to_absolute_paths() {
@@ -985,5 +1084,126 @@ mod tests {
             "outer repo .gitignore should not prune inner repo files: {:?}",
             files
         );
+    }
+
+    #[test]
+    fn respects_slopignore_without_any_flag() {
+        let temp = tempdir().expect("temp dir should be created");
+        let root = temp.path().to_path_buf();
+        fs::write(root.join(".slopignore"), "*.log\n").expect("slopignore should be written");
+        fs::write(root.join("keep.rs"), "keep").expect("file should be written");
+        fs::write(root.join("debug.log"), "noise").expect("file should be written");
+
+        let report = collect_source_files_reporting(&[root.clone()], Some(usize::MAX), &[], false)
+            .expect("collection should succeed");
+
+        assert!(report.files.contains(&root.join("keep.rs")));
+        assert!(
+            !report.files.contains(&root.join("debug.log")),
+            ".slopignore applies with no flag at all"
+        );
+        assert_eq!(report.ignored.len(), 1);
+        assert_eq!(report.ignored[0].path, root.join("debug.log"));
+        assert!(!report.ignored[0].is_dir);
+        assert_eq!(report.ignored[0].reason, IgnoreReason::SlopIgnore);
+    }
+
+    #[test]
+    fn slopignore_prunes_directories_without_descending() {
+        let temp = tempdir().expect("temp dir should be created");
+        let root = temp.path().to_path_buf();
+        fs::create_dir_all(root.join("vendor/deep")).expect("dirs should be created");
+        fs::write(root.join(".slopignore"), "vendor/\n").expect("slopignore should be written");
+        fs::write(root.join("keep.rs"), "keep").expect("file should be written");
+        fs::write(root.join("vendor/a.rs"), "skip").expect("file should be written");
+        fs::write(root.join("vendor/deep/b.rs"), "skip").expect("file should be written");
+
+        let report = collect_source_files_reporting(&[root.clone()], Some(usize::MAX), &[], false)
+            .expect("collection should succeed");
+
+        assert!(report.files.contains(&root.join("keep.rs")));
+        assert!(!report.files.iter().any(|path| path.starts_with(root.join("vendor"))));
+        assert_eq!(
+            report.ignored.len(),
+            1,
+            "a pruned directory is reported once, not once per descendant"
+        );
+        assert_eq!(report.ignored[0].path, root.join("vendor"));
+        assert!(report.ignored[0].is_dir);
+        assert_eq!(report.ignored[0].reason, IgnoreReason::SlopIgnore);
+    }
+
+    #[test]
+    fn slopignore_and_gitignore_are_independent() {
+        let temp = tempdir().expect("temp dir should be created");
+        let root = temp.path().to_path_buf();
+        fs::write(root.join(".gitignore"), "git_only.txt\n").expect("gitignore should be written");
+        fs::write(root.join(".slopignore"), "slop_only.txt\n")
+            .expect("slopignore should be written");
+        fs::write(root.join("git_only.txt"), "a").expect("file should be written");
+        fs::write(root.join("slop_only.txt"), "b").expect("file should be written");
+
+        // Without --respect-gitignore only .slopignore prunes.
+        let files = collect_source_files(&[root.clone()], Some(usize::MAX), &[], false)
+            .expect("collection should succeed");
+        assert!(files.contains(&root.join("git_only.txt")));
+        assert!(!files.contains(&root.join("slop_only.txt")));
+
+        // With --respect-gitignore both apply.
+        let files = collect_source_files(&[root.clone()], Some(usize::MAX), &[], true)
+            .expect("collection should succeed");
+        assert!(!files.contains(&root.join("git_only.txt")));
+        assert!(!files.contains(&root.join("slop_only.txt")));
+    }
+
+    #[test]
+    fn slopignore_does_not_filter_explicit_file_inputs() {
+        let temp = tempdir().expect("temp dir should be created");
+        let root = temp.path().to_path_buf();
+        fs::write(root.join(".slopignore"), "*.log\n").expect("slopignore should be written");
+        let explicit = root.join("debug.log");
+        fs::write(&explicit, "noise").expect("file should be written");
+
+        let files = collect_source_files(&[explicit.clone()], Some(0), &[], false)
+            .expect("collection should succeed");
+        assert_eq!(
+            files,
+            vec![explicit],
+            "naming a file explicitly overrides .slopignore"
+        );
+    }
+
+    #[test]
+    fn exclude_patterns_are_reported_with_their_own_reason() {
+        let temp = tempdir().expect("temp dir should be created");
+        let root = temp.path().to_path_buf();
+        fs::write(root.join("keep.rs"), "keep").expect("file should be written");
+        fs::write(root.join("notes.md"), "skip").expect("file should be written");
+
+        let report = collect_source_files_reporting(
+            &[root.clone()],
+            Some(usize::MAX),
+            &["*.md".to_string()],
+            false,
+        )
+        .expect("collection should succeed");
+
+        assert!(report.files.contains(&root.join("keep.rs")));
+        assert!(!report.files.contains(&root.join("notes.md")));
+        assert_eq!(report.ignored.len(), 1);
+        assert_eq!(report.ignored[0].path, root.join("notes.md"));
+        assert_eq!(report.ignored[0].reason, IgnoreReason::Exclude);
+    }
+
+    #[test]
+    fn walk_report_is_empty_when_no_slopignore_exists() {
+        let temp = tempdir().expect("temp dir should be created");
+        let root = temp.path().to_path_buf();
+        fs::write(root.join("keep.rs"), "keep").expect("file should be written");
+
+        let report = collect_source_files_reporting(&[root], Some(usize::MAX), &[], false)
+            .expect("collection should succeed");
+        assert_eq!(report.files.len(), 1);
+        assert!(report.ignored.is_empty());
     }
 }

@@ -29,6 +29,9 @@ pub struct Config {
     pub redact_secrets: bool,
     pub secret_rules_path: Option<PathBuf>,
     pub graph_token_model: String,
+    pub verbose_output: bool,
+    pub deslop_cache: bool,
+    pub deslop_cache_path: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -55,6 +58,13 @@ impl Default for Config {
             redact_secrets: false,
             secret_rules_path: None,
             graph_token_model: "o200k_base".to_string(),
+            verbose_output: false,
+            // Off by default: deslop idempotency now comes from comparing the
+            // block against the file on disk, which is exact and stateless.
+            // The ledger is an opt-in overlay for people who want a returned
+            // block applied at most once ever, even after the file changes.
+            deslop_cache: false,
+            deslop_cache_path: None,
         }
     }
 }
@@ -135,7 +145,21 @@ pub fn default_config_yaml() -> String {
          # slops containing high-confidence secret patterns (private keys,\n\
          # AWS/Google/Stripe tokens, JWTs, etc.). Override per-run with\n\
          # --allow-secrets or --redact.\n\
-         secret_scan: {secret_scan}\n",
+         secret_scan: {secret_scan}\n\n\
+         # Print the ignored-file annotations in the slopify tree. Override\n\
+         # per-run with --verbose.\n\
+         verbose_output: {verbose_output}\n\n\
+         # Remember which returned slop blocks have already been deslopped and\n\
+         # skip them on later runs, even if the target file has since changed.\n\
+         # Deslop is already idempotent without this: a block whose content\n\
+         # matches the file on disk is never rewritten. Turn this on only if\n\
+         # you want a block applied at most once, ever.\n\
+         deslop_cache: {deslop_cache}\n\n\
+         # Where that ledger lives. Defaults to\n\
+         # $HOME/.slop/.slop_blocks_cache. The SLOP_DESLOP_CACHE environment\n\
+         # variable overrides this; set it to 'off' to disable caching for a\n\
+         # single run.\n\
+         deslop_cache_path: {deslop_cache_path}\n",
         connect_watcher = false,
         auto_deslop = false,
         warn_overwrite = false,
@@ -154,6 +178,9 @@ pub fn default_config_yaml() -> String {
         sel_prov = false,
         sel_prov_max = 2048,
         secret_scan = "warn",
+        verbose_output = false,
+        deslop_cache = false,
+        deslop_cache_path = "~/.slop/.slop_blocks_cache",
     )
 }
 
@@ -194,6 +221,14 @@ pub fn default_slopified_folder() -> Option<PathBuf> {
 pub fn default_index_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from)?;
     Some(home.join(".cache").join("slop").join("index"))
+}
+
+/// Ledger of already-applied deslop blocks. Lives beside the other slop state
+/// in `$HOME/.slop/` rather than `$HOME/.cache/`, so that clearing an OS cache
+/// directory cannot silently change deslop behavior.
+pub fn default_deslop_cache_path() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    Some(home.join(".slop").join(".slop_blocks_cache"))
 }
 
 #[cfg(test)]
@@ -290,6 +325,50 @@ mod tests {
         assert!(yaml.contains("graph_format:"));
         assert!(yaml.contains("graph_force_include_supertypes:"));
         assert!(yaml.contains("secret_scan:"));
+        assert!(yaml.contains("verbose_output:"));
+        assert!(yaml.contains("deslop_cache:"));
+        assert!(yaml.contains("deslop_cache_path:"));
+    }
+
+    #[test]
+    fn deslop_cache_defaults_to_off_and_lives_under_dot_slop() {
+        let config = Config::default();
+        assert!(!config.deslop_cache);
+        assert!(config.deslop_cache_path.is_none());
+        assert!(!config.verbose_output);
+
+        // SAFETY: this test runs single-threaded; mutating HOME is safe.
+        unsafe {
+            std::env::set_var("HOME", "/home/example");
+        }
+        assert_eq!(
+            default_deslop_cache_path(),
+            Some(PathBuf::from("/home/example/.slop/.slop_blocks_cache"))
+        );
+        unsafe {
+            std::env::set_var("HOME", "/tmp");
+        }
+    }
+
+    #[test]
+    fn parses_verbose_and_cache_overrides() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("config.yaml");
+        fs::write(
+            &path,
+            "verbose_output: true\n\
+             deslop_cache: true\n\
+             deslop_cache_path: /tmp/blocks\n",
+        )
+        .expect("write config");
+
+        let config = load_config_from(&path).expect("should parse");
+        assert!(config.verbose_output);
+        assert!(config.deslop_cache);
+        assert_eq!(
+            config.deslop_cache_path,
+            Some(PathBuf::from("/tmp/blocks"))
+        );
     }
 
     #[test]

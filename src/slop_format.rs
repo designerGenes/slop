@@ -84,13 +84,24 @@ pub fn parse_document(markdown: &str) -> Result<SoupDocument, SlopError> {
             partial_range,
             logical_line_count,
             trailing_newline,
-            content_lines,
+            content_lines: content_lines.clone(),
             base_sha,
             read_only,
+            block_id: Some(compute_block_id(&content_lines, trailing_newline)),
         });
     }
 
     Ok(SoupDocument { meta_blocks, blocks })
+}
+
+pub fn compute_block_id(content_lines: &[String], trailing_newline: bool) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for line in content_lines {
+        hasher.update(line.as_bytes());
+        hasher.update(b"\n");
+    }
+    hasher.update(&[trailing_newline as u8]);
+    hasher.finalize().to_hex().to_string()
 }
 
 fn serialize_meta_header(meta: &SoupMetaBlock) -> String {

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use slop::models::{SoupBlock, SoupPartialRange, SourceFile};
-use slop::slop_format::{analyze_contents, parse_document, serialize_document};
+use slop::slop_format::{analyze_contents, compute_block_id, parse_document, serialize_document};
 
 fn source_file(path: &str, contents: &str) -> SourceFile {
     let (logical_line_count, trailing_newline) = analyze_contents(contents);
@@ -73,6 +73,7 @@ fn parses_partial_block_metadata() {
     )
     .expect("document should parse");
 
+    let content_lines = vec!["updated".to_string(), "lines".to_string()];
     assert_eq!(
         parsed.blocks,
         vec![SoupBlock {
@@ -83,9 +84,10 @@ fn parses_partial_block_metadata() {
             }),
             logical_line_count: 2,
             trailing_newline: false,
-            content_lines: vec!["updated".to_string(), "lines".to_string()],
+            content_lines: content_lines.clone(),
             base_sha: None,
             read_only: false,
+            block_id: Some(compute_block_id(&content_lines, false)),
         }]
     );
 }

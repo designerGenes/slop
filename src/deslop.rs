@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -6,7 +6,7 @@ use crate::config::Config;
 use crate::error::SlopError;
 use crate::models::{CliArgs, SoupBlock, SoupDocument, SoupMatchResult, SoupPartialRange};
 use crate::pathing::{resolve_absolute, resolve_output_dir};
-use crate::slop_format::parse_document;
+use crate::slop_format::{compute_block_id, parse_document};
 
 pub fn find_matching_slop_file(
     selectors: &[PathBuf],
@@ -19,6 +19,163 @@ pub fn find_matching_slop_file(
             slop_dir: slop_dir.to_path_buf(),
         }),
         SoupMatchResult::Ambiguous(paths) => Err(SlopError::AmbiguousSoupFileMatch { paths }),
+    }
+}
+
+const DESLOP_CACHE_LIMIT: usize = 100;
+const DESLOP_CACHE_ENV: &str = "SLOP_DESLOP_CACHE";
+
+/// Where (and whether) the applied-block ledger lives.
+///
+/// Precedence: `SLOP_DESLOP_CACHE` (a path, or one of off/disabled/none/false
+/// to disable) beats `deslop_cache_path` in config.yaml, which beats
+/// `$HOME/.slop/.slop_blocks_cache`. The ledger is only consulted when
+/// `deslop_cache: true` — deslop is idempotent without it, because a block
+/// whose content already matches the file on disk is never rewritten.
+fn resolve_cache_path(config: &Config) -> Option<PathBuf> {
+    if let Ok(raw) = std::env::var(DESLOP_CACHE_ENV) {
+        let trimmed = raw.trim();
+        let disabled = trimmed.is_empty()
+            || matches!(
+                trimmed.to_ascii_lowercase().as_str(),
+                "off" | "disabled" | "none" | "false"
+            );
+        if disabled {
+            return None;
+        }
+        // Note: the path itself keeps its case. The previous implementation
+        // lowercased it, which silently broke case-sensitive paths.
+        return Some(crate::pathing::expand_tilde(Path::new(trimmed)));
+    }
+
+    if !config.deslop_cache {
+        return None;
+    }
+
+    match config.deslop_cache_path {
+        Some(ref configured) => Some(crate::pathing::expand_tilde(configured)),
+        None => crate::config::default_deslop_cache_path(),
+    }
+}
+
+/// Ledger key. Scoped by destination path as well as content: the same block
+/// body legitimately lands at two different paths (an empty `__init__.py`, a
+/// one-line `mod.rs`), and skipping the second because the first was applied
+/// is silent data loss.
+fn cache_key(path: &Path, block_id: &str) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(path.to_string_lossy().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(block_id.as_bytes());
+    hasher.finalize().to_hex().to_string()
+}
+
+struct DeslopCache {
+    seen: HashSet<String>,
+    order: Vec<String>,
+    path: PathBuf,
+    limit: usize,
+    dirty: bool,
+}
+
+impl DeslopCache {
+    fn load(path: PathBuf) -> Self {
+        let order = fs::read_to_string(&path)
+            .ok()
+            .map(|body| {
+                body.lines()
+                    .map(|line| line.trim().to_string())
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let seen = order.iter().cloned().collect::<HashSet<_>>();
+        Self {
+            seen,
+            order,
+            path,
+            limit: DESLOP_CACHE_LIMIT,
+            dirty: false,
+        }
+    }
+
+    fn contains(&self, block_id: &str) -> bool {
+        self.seen.contains(block_id)
+    }
+
+    fn record(&mut self, block_id: String) {
+        if self.seen.contains(&block_id) {
+            return;
+        }
+        self.seen.insert(block_id.clone());
+        self.order.push(block_id);
+        while self.order.len() > self.limit {
+            let evicted = self.order.remove(0);
+            self.seen.remove(&evicted);
+        }
+        self.dirty = true;
+    }
+
+    fn persist(&mut self) {
+        if !self.dirty {
+            return;
+        }
+        if let Some((parent, Err(error))) = self
+            .path
+            .parent()
+            .map(|parent| (parent, fs::create_dir_all(parent)))
+        {
+            eprintln!(
+                "warning: failed to create deslop cache directory {}: {error}",
+                parent.display()
+            );
+            return;
+        }
+        let body = self.order.join("\n");
+        if let Err(error) = fs::write(&self.path, body) {
+            eprintln!(
+                "warning: failed to persist deslop cache {}: {error}",
+                self.path.display()
+            );
+            return;
+        }
+        self.dirty = false;
+    }
+
+    #[cfg(test)]
+    fn entry_count(&self) -> usize {
+        self.order.len()
+    }
+}
+
+fn block_id_for(block: &SoupBlock) -> String {
+    block
+        .block_id
+        .clone()
+        .unwrap_or_else(|| compute_block_id(&block.content_lines, block.trailing_newline))
+}
+
+fn short_id(block_id: &str) -> &str {
+    let len = block_id.len().min(12);
+    &block_id[..len]
+}
+
+/// Whether the file at `path` is already byte-identical to `contents`.
+/// A missing or unreadable file is "not matching", so the write proceeds.
+fn file_already_matches(path: &Path, contents: &str) -> bool {
+    fs::read(path).is_ok_and(|existing| existing == contents.as_bytes())
+}
+
+fn warn_on_base_sha_drift(path: &Path, expected: &str) {
+    let Ok(on_disk_bytes) = fs::read(path) else {
+        return;
+    };
+    let actual = blake3::hash(&on_disk_bytes).to_hex().to_string();
+    if actual != expected {
+        eprintln!(
+            "warning: base SHA drift for {}: expected {expected}, got {actual}; applying partial block anyway",
+            path.display()
+        );
     }
 }
 
@@ -58,6 +215,13 @@ pub fn run_deslop(args: &CliArgs, config: &Config) -> Result<Vec<PathBuf>, SlopE
 
     let allowed_roots = compute_allowed_roots(&document.blocks, &args.allow_roots, &cwd);
 
+    let cache_path = if args.dry_run {
+        None
+    } else {
+        resolve_cache_path(config)
+    };
+    let mut cache = cache_path.map(DeslopCache::load);
+
     let mut restored_paths = Vec::with_capacity(document.blocks.len());
     for block in document.blocks {
         let restored_path = block.original_absolute_path.clone();
@@ -67,18 +231,28 @@ pub fn run_deslop(args: &CliArgs, config: &Config) -> Result<Vec<PathBuf>, SlopE
             continue;
         }
 
-        if let Some(ref sha) = block.base_sha {
-            if block.partial_range.is_some() {
-                if let Ok(on_disk_bytes) = fs::read(&restored_path) {
-                    let actual = blake3::hash(&on_disk_bytes).to_hex().to_string();
-                    if actual != *sha {
-                        eprintln!(
-                            "warning: base SHA drift for {}: expected {}, got {}; applying partial block anyway",
-                            restored_path.display(), sha, actual
-                        );
-                    }
-                }
-            }
+        let block_id = block_id_for(&block);
+        let ledger_key = cache_key(&restored_path, &block_id);
+        if cache
+            .as_ref()
+            .is_some_and(|cache| cache.contains(&ledger_key))
+        {
+            eprintln!(
+                "note: slop block {} for {} already deslopped; skipping (deslop_cache)",
+                short_id(&block_id),
+                restored_path.display()
+            );
+            continue;
+        }
+
+        // Drift only matters for partial blocks: a full block replaces the
+        // file wholesale, so the prior contents are irrelevant.
+        let drift_sha = block
+            .base_sha
+            .as_deref()
+            .filter(|_| block.partial_range.is_some());
+        if let Some(sha) = drift_sha {
+            warn_on_base_sha_drift(&restored_path, sha);
         }
 
         if !is_within_allowed_roots(&restored_path, &allowed_roots) {
@@ -95,12 +269,31 @@ pub fn run_deslop(args: &CliArgs, config: &Config) -> Result<Vec<PathBuf>, SlopE
             );
         }
 
+        let contents = materialize_block_contents(&restored_path, &block)?;
+
         if args.dry_run {
-            let contents = materialize_block_contents(&restored_path, &block)?;
             let existing = fs::read_to_string(&restored_path).unwrap_or_default();
             let diff = unified_diff(&existing, &contents, &restored_path);
             if !diff.is_empty() {
                 println!("{}", diff);
+            }
+            restored_paths.push(restored_path);
+            continue;
+        }
+
+        // The load-bearing idempotency check: if the file on disk is already
+        // byte-identical to what this block produces, applying it again is a
+        // no-op, so don't touch the file (and don't churn its mtime). This is
+        // exact, needs no persisted state, and generalizes the check
+        // `apply_partial_block` already performs for partial blocks.
+        if file_already_matches(&restored_path, &contents) {
+            eprintln!(
+                "note: {} already matches slop block {}; leaving it untouched",
+                restored_path.display(),
+                short_id(&block_id)
+            );
+            if let Some(ref mut cache) = cache {
+                cache.record(ledger_key);
             }
             restored_paths.push(restored_path);
             continue;
@@ -113,12 +306,19 @@ pub fn run_deslop(args: &CliArgs, config: &Config) -> Result<Vec<PathBuf>, SlopE
             })?;
         }
 
-        let contents = materialize_block_contents(&restored_path, &block)?;
         fs::write(&restored_path, contents).map_err(|error| SlopError::FileWriteFailure {
             path: restored_path.clone(),
             source: error,
         })?;
+
+        if let Some(ref mut cache) = cache {
+            cache.record(ledger_key);
+        }
         restored_paths.push(restored_path);
+    }
+
+    if let Some(ref mut cache) = cache {
+        cache.persist();
     }
 
     if args.dry_run {
@@ -458,10 +658,11 @@ fn classify_selector(selector: &Path) -> SelectorKind {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use tempfile::tempdir;
 
+    use crate::config::Config;
     use crate::models::{SoupBlock, SoupDocument, SoupPartialRange};
 
     use super::{
@@ -481,6 +682,7 @@ mod tests {
                     content_lines: vec!["content".to_string()],
                     base_sha: None,
                     read_only: false,
+                    block_id: None,
                 })
                 .collect(),
         }
@@ -693,5 +895,217 @@ mod tests {
             .expect("apply should succeed when content has not been applied yet");
 
         assert_eq!(result, "one\ntwo updated\nthree\n");
+    }
+
+    #[test]
+    fn block_id_is_stable_for_identical_content() {
+        use super::block_id_for;
+        use crate::models::SoupBlock;
+
+        let mk = |content: &[&str], trailing: bool| SoupBlock {
+            original_absolute_path: PathBuf::from("/anywhere/file.txt"),
+            partial_range: None,
+            logical_line_count: content.len(),
+            trailing_newline: trailing,
+            content_lines: content.iter().map(|s| s.to_string()).collect(),
+            base_sha: None,
+            read_only: false,
+            block_id: None,
+        };
+
+        let a = mk(&["alpha", "beta"], true);
+        let b = mk(&["alpha", "beta"], true);
+        let c = mk(&["alpha", "beta"], false);
+        let d = mk(&["alpha", "gamma"], true);
+
+        assert_eq!(block_id_for(&a), block_id_for(&b), "identical content + trailing must hash equal");
+        assert_ne!(block_id_for(&a), block_id_for(&c), "trailing newline must affect the id");
+        assert_ne!(block_id_for(&a), block_id_for(&d), "different content must hash differently");
+    }
+
+    #[test]
+    fn block_id_is_independent_of_path() {
+        use super::block_id_for;
+        use crate::models::SoupBlock;
+
+        let mk = |path: &str| SoupBlock {
+            original_absolute_path: PathBuf::from(path),
+            partial_range: None,
+            logical_line_count: 1,
+            trailing_newline: false,
+            content_lines: vec!["same".to_string()],
+            base_sha: None,
+            read_only: false,
+            block_id: None,
+        };
+
+        assert_eq!(
+            block_id_for(&mk("/a/b.txt")),
+            block_id_for(&mk("/x/y.txt")),
+            "id is hashed from content, not path"
+        );
+    }
+
+    #[test]
+    fn cache_records_and_detects_block_ids() {
+        use super::DeslopCache;
+
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("cache");
+        let mut cache = DeslopCache::load(path.clone());
+
+        assert!(!cache.contains("aaaa1111"));
+        cache.record("aaaa1111".to_string());
+        assert!(cache.contains("aaaa1111"));
+        cache.persist();
+        assert!(path.is_file(), "cache file should be persisted");
+    }
+
+    #[test]
+    fn cache_evicts_oldest_beyond_limit() {
+        use super::{DeslopCache, DESLOP_CACHE_LIMIT};
+
+        let temp = tempdir().expect("tempdir");
+        let mut cache = DeslopCache::load(temp.path().join("cache"));
+
+        for i in 0..DESLOP_CACHE_LIMIT {
+            cache.record(format!("block-{i:04}"));
+        }
+        assert!(cache.contains("block-0000"));
+        assert!(cache.contains(&format!("block-{:04}", DESLOP_CACHE_LIMIT - 1)));
+
+        cache.record("new-block".to_string());
+        assert!(!cache.contains("block-0000"), "oldest entry must be evicted");
+        assert!(cache.contains("new-block"));
+        assert_eq!(
+            cache.entry_count(),
+            DESLOP_CACHE_LIMIT,
+            "cache must stay at the configured limit"
+        );
+    }
+
+    #[test]
+    fn cache_persists_across_loads() {
+        use super::DeslopCache;
+
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("cache");
+
+        {
+            let mut cache = DeslopCache::load(path.clone());
+            cache.record("persisted-id".to_string());
+            cache.persist();
+        }
+
+        let reloaded = DeslopCache::load(path);
+        assert!(reloaded.contains("persisted-id"));
+    }
+
+    #[test]
+    fn cache_dedupes_repeated_record_calls() {
+        use super::DeslopCache;
+
+        let temp = tempdir().expect("tempdir");
+        let mut cache = DeslopCache::load(temp.path().join("cache"));
+
+        cache.record("dup".to_string());
+        cache.record("dup".to_string());
+
+        assert_eq!(cache.entry_count(), 1);
+    }
+
+    #[test]
+    fn cache_key_is_scoped_by_destination_path() {
+        use super::cache_key;
+
+        let key_a = cache_key(Path::new("/a/__init__.py"), "sameblockid");
+        let key_b = cache_key(Path::new("/b/__init__.py"), "sameblockid");
+        assert_ne!(
+            key_a, key_b,
+            "identical content at two paths must not collide in the ledger"
+        );
+        assert_eq!(key_a, cache_key(Path::new("/a/__init__.py"), "sameblockid"));
+    }
+
+    #[test]
+    fn file_already_matches_detects_identical_and_missing_files() {
+        use super::file_already_matches;
+
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("target.txt");
+
+        assert!(
+            !file_already_matches(&path, "body\n"),
+            "a missing file never matches"
+        );
+
+        fs::write(&path, "body\n").expect("file should be written");
+        assert!(file_already_matches(&path, "body\n"));
+        assert!(!file_already_matches(&path, "different\n"));
+        assert!(
+            !file_already_matches(&path, "body"),
+            "the trailing newline is part of the comparison"
+        );
+    }
+
+    #[test]
+    fn cache_disabled_by_default_and_resolves_under_dot_slop() {
+        use super::resolve_cache_path;
+
+        // SAFETY: these tests run single-threaded; mutating env is safe.
+        unsafe {
+            std::env::remove_var("SLOP_DESLOP_CACHE");
+            std::env::set_var("HOME", "/home/example");
+        }
+
+        let mut config = Config::default();
+        assert!(
+            resolve_cache_path(&config).is_none(),
+            "the ledger is opt-in; content comparison covers idempotency"
+        );
+
+        config.deslop_cache = true;
+        assert_eq!(
+            resolve_cache_path(&config),
+            Some(PathBuf::from("/home/example/.slop/.slop_blocks_cache"))
+        );
+
+        config.deslop_cache_path = Some(PathBuf::from("~/custom/blocks"));
+        assert_eq!(
+            resolve_cache_path(&config),
+            Some(PathBuf::from("/home/example/custom/blocks"))
+        );
+
+        unsafe {
+            std::env::set_var("HOME", "/tmp");
+        }
+    }
+
+    #[test]
+    fn cache_env_var_overrides_config_and_preserves_case() {
+        use super::resolve_cache_path;
+
+        let config = Config::default();
+
+        // SAFETY: these tests run single-threaded; mutating env is safe.
+        unsafe {
+            std::env::set_var("SLOP_DESLOP_CACHE", "/Tmp/MixedCase/Blocks");
+        }
+        assert_eq!(
+            resolve_cache_path(&config),
+            Some(PathBuf::from("/Tmp/MixedCase/Blocks")),
+            "cache paths must not be lowercased"
+        );
+
+        for disabled in ["off", "OFF", "disabled", "none", "false", "  "] {
+            unsafe {
+                std::env::set_var("SLOP_DESLOP_CACHE", disabled);
+            }
+            assert!(resolve_cache_path(&config).is_none());
+        }
+
+        unsafe {
+            std::env::remove_var("SLOP_DESLOP_CACHE");
+        }
     }
 }

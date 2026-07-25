@@ -64,6 +64,9 @@ struct RawCliArgs {
     context_files: Vec<PathBuf>,
     #[arg(long = "silent", short = 'S')]
     silent: bool,
+    /// Long-form only: `-v`/`-V` are already claimed by version reporting.
+    #[arg(long = "verbose")]
+    verbose: bool,
     #[arg(value_name = "INPUT", required = true)]
     inputs: Vec<PathBuf>,
 }
@@ -127,6 +130,7 @@ where
         redact: parsed.redact,
         context_files: parsed.context_files,
         silent: parsed.silent,
+        verbose: parsed.verbose,
     })
 }
 
@@ -180,6 +184,18 @@ mod tests {
         .expect("should parse");
         assert_eq!(result.graph_format.as_deref(), Some("dot"));
         assert_eq!(result.graph_map_tokens, Some(4096));
+    }
+
+    #[test]
+    fn parses_verbose_flag() {
+        let result = parse_cli_args_from(["slop", "--verbose", "file.txt"]).expect("should parse");
+        assert!(result.verbose);
+    }
+
+    #[test]
+    fn verbose_defaults_to_false() {
+        let result = parse_cli_args_from(["slop", "file.txt"]).expect("should parse");
+        assert!(!result.verbose);
     }
 
     #[test]

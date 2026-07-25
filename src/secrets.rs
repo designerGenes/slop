@@ -113,6 +113,37 @@ fn shannon_entropy(s: &str) -> f64 {
     entropy
 }
 
+fn is_secret_charset(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '_' || c == '-'
+}
+
+fn char_classes(s: &str) -> (bool, bool, bool) {
+    let mut upper = false;
+    let mut lower = false;
+    let mut digit = false;
+    for c in s.chars() {
+        match c {
+            'A'..='Z' => upper = true,
+            'a'..='z' => lower = true,
+            '0'..='9' => digit = true,
+            _ => {}
+        }
+    }
+    (upper, lower, digit)
+}
+
+fn looks_like_secret_token(token: &str) -> bool {
+    if token.len() < 20 {
+        return false;
+    }
+    if !token.chars().all(is_secret_charset) {
+        return false;
+    }
+    let (upper, lower, digit) = char_classes(token);
+    let classes = [upper, lower, digit].iter().filter(|&&f| f).count();
+    classes >= 3 && shannon_entropy(token) > 4.5
+}
+
 fn mask_value(value: &str) -> String {
     if value.len() <= 8 {
         return "«REDACTED»".to_string();
@@ -159,22 +190,20 @@ pub fn scan_files(files: &[SourceFile]) -> Vec<Finding> {
             }
 
             for token in line.split(|c: char| c.is_whitespace() || c == '=' || c == '"' || c == '\'') {
-                if token.len() >= 20 {
-                    let ent = shannon_entropy(token);
-                    if ent > 4.0 {
-                        let already_found = findings.iter().any(|f| {
-                            f.line == i + 1 && f.file == rel_name
-                        });
-                        if !already_found {
-                            findings.push(Finding {
-                                file: rel_name.clone(),
-                                line: i + 1,
-                                rule: "high_entropy".to_string(),
-                                severity: Severity::Warn,
-                                masked_value: mask_value(token),
-                            });
-                        }
-                    }
+                if !looks_like_secret_token(token) {
+                    continue;
+                }
+                let already_found = findings.iter().any(|f| {
+                    f.line == i + 1 && f.file == rel_name
+                });
+                if !already_found {
+                    findings.push(Finding {
+                        file: rel_name.clone(),
+                        line: i + 1,
+                        rule: "high_entropy".to_string(),
+                        severity: Severity::Warn,
+                        masked_value: mask_value(token),
+                    });
                 }
             }
         }
@@ -274,4 +303,101 @@ pub fn enforce(
     eprintln!("warning: potential secrets detected: {}", summary);
 
     Ok(files.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{looks_like_secret_token, scan_files, Severity};
+    use crate::models::SourceFile;
+    use std::path::PathBuf;
+
+    fn source_file(name: &str, contents: &str) -> SourceFile {
+        SourceFile {
+            original_absolute_path: PathBuf::from(name),
+            file_name: name.to_string(),
+            name_token: name.to_string(),
+            contents: contents.to_string(),
+            logical_line_count: 1,
+            trailing_newline: false,
+            base_sha: None,
+            read_only: false,
+        }
+    }
+
+    fn high_entropy_findings(files: &[SourceFile]) -> Vec<(String, usize)> {
+        scan_files(files)
+            .into_iter()
+            .filter(|f| f.rule == "high_entropy")
+            .map(|f| (f.file, f.line))
+            .collect()
+    }
+
+    #[test]
+    fn flags_opaque_mixed_class_secret_like_tokens() {
+        assert!(looks_like_secret_token(
+            "aB3xK9mN2pQr7sT4vUwXyZ0aBcDeFgHi"
+        ));
+        assert!(looks_like_secret_token(
+            "7B3xK9mN2pQr7sT4vUwXyZ0aBcDeFgHiJkLm"
+        ));
+    }
+
+    #[test]
+    fn rejects_source_code_tokens() {
+        assert!(!looks_like_secret_token("fs::read_to_string(path)"));
+        assert!(!looks_like_secret_token("Vec::new()"));
+        assert!(!looks_like_secret_token("assert_eq!(a, b)"));
+        assert!(!looks_like_secret_token("parser.c"));
+        assert!(!looks_like_secret_token("registry+https://github.com"));
+    }
+
+    #[test]
+    fn rejects_lowercase_hex_checksums() {
+        assert!(!looks_like_secret_token(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
+    }
+
+    #[test]
+    fn rejects_short_or_single_class_tokens() {
+        assert!(!looks_like_secret_token("short"));
+        assert!(!looks_like_secret_token("onlylowercaselettershere"));
+        assert!(!looks_like_secret_token("ONLYUPPERCASELETTERSHERE"));
+    }
+
+    #[test]
+    fn scan_files_skips_code_lines_but_flags_secret_like_token() {
+        let src = "use std::fs;\n\
+                   let api = \"aB3xK9mN2pQr7sT4vUwXyZ0aBcDeFgHi\";\n";
+        let findings = high_entropy_findings(&[source_file("main.rs", src)]);
+
+        assert_eq!(findings, vec![("main.rs".to_string(), 2)]);
+    }
+
+    #[test]
+    fn scan_files_does_not_flag_cargo_lock_checksums() {
+        let src = "name = \"regex\"\n\
+                   version = \"1.12.2\"\n\
+                   source = \"registry+https://github.com/rust-lang/crates.io-index\"\n\
+                   checksum = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n";
+        let findings = high_entropy_findings(&[source_file("Cargo.lock", src)]);
+
+        assert!(findings.is_empty(), "findings: {:?}", findings);
+    }
+
+    #[test]
+    fn respects_slop_allow_secret_suppression() {
+        let src = "let api = \"aB3xK9mN2pQr7sT4vUwXyZ0aBcDeFgHi\";  # slop:allow-secret\n";
+        let findings = high_entropy_findings(&[source_file("main.rs", src)]);
+
+        assert!(findings.is_empty(), "findings: {:?}", findings);
+    }
+
+    #[test]
+    fn sensitive_filename_still_flagged_independently() {
+        let findings = scan_files(&[source_file("secrets.rs", "// harmless\n")]);
+        assert!(findings
+            .iter()
+            .any(|f| f.rule == "sensitive_filename" && f.severity == Severity::Block));
+    }
 }

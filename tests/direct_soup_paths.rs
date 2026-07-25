@@ -5,7 +5,9 @@ use predicates::str::contains;
 use tempfile::tempdir;
 
 fn cargo_bin() -> Command {
-    Command::cargo_bin("slop").expect("binary should build")
+    let mut cmd = Command::cargo_bin("slop").expect("binary should build");
+    cmd.env("SLOP_DESLOP_CACHE", "off");
+    cmd
 }
 
 #[test]

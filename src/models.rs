@@ -28,6 +28,33 @@ pub struct CliArgs {
     pub redact: bool,
     pub context_files: Vec<PathBuf>,
     pub silent: bool,
+    pub verbose: bool,
+}
+
+/// Why a path was left out of a slop.
+///
+/// `SKIP_DIRS` (`.git`, `node_modules`, `target`, ...) is deliberately absent:
+/// those prunes are structural and reporting them would bury the signal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IgnoreReason {
+    /// Matched a pattern in the repo's `.slopignore`.
+    SlopIgnore,
+    /// Matched a `-x/--exclude` pattern given on the command line.
+    Exclude,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IgnoredEntry {
+    pub path: PathBuf,
+    pub is_dir: bool,
+    pub reason: IgnoreReason,
+}
+
+/// Result of a directory walk: what slop will bundle, and what it skipped.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WalkReport {
+    pub files: Vec<PathBuf>,
+    pub ignored: Vec<IgnoredEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +84,7 @@ pub struct SoupBlock {
     pub content_lines: Vec<String>,
     pub base_sha: Option<String>,
     pub read_only: bool,
+    pub block_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

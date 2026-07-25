@@ -13,6 +13,8 @@ pub mod selection;
 pub mod sharktopus;
 pub mod slop_format;
 pub mod slop;
+pub mod slopignore;
+pub mod tree;
 
 use cli::parse_cli_args;
 use config::load_config;

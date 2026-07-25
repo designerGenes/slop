@@ -5,7 +5,9 @@ use predicates::str::contains;
 use tempfile::tempdir;
 
 fn cargo_bin() -> Command {
-    Command::cargo_bin("slop").expect("binary should build")
+    let mut cmd = Command::cargo_bin("slop").expect("binary should build");
+    cmd.env("SLOP_DESLOP_CACHE", "off");
+    cmd
 }
 
 #[test]
@@ -173,5 +175,76 @@ fn deslop_partial_block_is_idempotent_across_runs() {
         fs::read_to_string(&path).expect("file should be unchanged after second run"),
         expected,
         "second deslop run must not corrupt the already-updated file"
+    );
+}
+
+#[test]
+fn deslop_block_cache_skips_already_deslopped_blocks_across_runs() {
+    let temp = tempdir().expect("tempdir should exist");
+    let path = temp.path().join("cached.txt");
+    let slop_file = temp.path().join("cached.slop");
+    let cache_file = temp.path().join("cache");
+
+    fs::write(
+        &slop_file,
+        format!(
+            "#SLOP \"{}\" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 0\noriginal",
+            path.display()
+        ),
+    )
+    .expect("slop file should be written");
+
+    // First deslop: block is applied and its id is cached.
+    Command::cargo_bin("slop")
+        .expect("binary should build")
+        .env("SLOP_DESLOP_CACHE", cache_file.to_str().unwrap())
+        .args(["-d"])
+        .arg(&slop_file)
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(&path).expect("file should be restored"),
+        "original"
+    );
+
+    // The user edits the file on disk after the first deslop.
+    fs::write(&path, "user edit").expect("user edit should be written");
+
+    // Second deslop of the same slop document: the block id is already cached,
+    // so the block is skipped (idempotent) and the user's edit is preserved.
+    Command::cargo_bin("slop")
+        .expect("binary should build")
+        .env("SLOP_DESLOP_CACHE", cache_file.to_str().unwrap())
+        .args(["-d"])
+        .arg(&slop_file)
+        .assert()
+        .success()
+        .stderr(contains("already deslopped"));
+
+    assert_eq!(
+        fs::read_to_string(&path).expect("user edit must be preserved on cached skip"),
+        "user edit",
+        "a cached block must not be re-applied over the user's changes"
+    );
+
+    // A different slop block (new content -> new id) is applied normally.
+    fs::write(
+        &slop_file,
+        format!(
+            "#SLOP \"{}\" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 0\nchanged content",
+            path.display()
+        ),
+    )
+    .expect("updated slop file should be written");
+    Command::cargo_bin("slop")
+        .expect("binary should build")
+        .env("SLOP_DESLOP_CACHE", cache_file.to_str().unwrap())
+        .args(["-d"])
+        .arg(&slop_file)
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read_to_string(&path).expect("new block should be applied"),
+        "changed content"
     );
 }
