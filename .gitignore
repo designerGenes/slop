@@ -2,3 +2,4 @@
 graphify-out/
 target/
 .DS_Store
+.slopignore

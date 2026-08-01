@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "SlopIgnore",
+  "scopeName": "source.slopignore",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#slopinclude"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "match": "^\\s*#.*$",
+          "name": "comment.line.number-sign.slopignore"
+        }
+      ]
+    },
+    "slopinclude": {
+      "patterns": [
+        {
+          "match": "^(\\s*)(slopinclude)\\b",
+          "captures": {
+            "2": {
+              "name": "keyword.control.slopinclude"
+            }
+          }
+        },
+        {
+          "match": "^(\\s*)(\\+)",
+          "captures": {
+            "2": {
+              "name": "keyword.control.slopinclude"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

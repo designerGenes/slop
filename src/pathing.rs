@@ -275,7 +275,7 @@ fn collect_includes(
     forced_files: &mut Vec<PathBuf>,
 ) -> Result<(), SlopError> {
     for path in slopignore.explicit_includes() {
-        include_file(path, seen, files, forced_seen, forced_files)?;
+        include_path(path, seen, files, forced_seen, forced_files)?;
     }
 
     let Some(root) = slopignore.include_root() else {
@@ -293,6 +293,48 @@ fn collect_includes(
             }
         })?;
         if entry.file_type().is_file() && slopignore.is_included(entry.path(), false) {
+            include_file(entry.path(), seen, files, forced_seen, forced_files)?;
+        }
+    }
+    Ok(())
+}
+
+fn include_path(
+    path: &Path,
+    seen: &mut BTreeSet<PathBuf>,
+    files: &mut Vec<PathBuf>,
+    forced_seen: &mut BTreeSet<PathBuf>,
+    forced_files: &mut Vec<PathBuf>,
+) -> Result<(), SlopError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(SlopError::FileReadFailure {
+                path: path.to_path_buf(),
+                source: error,
+            });
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    if !metadata.is_dir() {
+        return include_file(path, seen, files, forced_seen, forced_files);
+    }
+
+    for entry in WalkDir::new(path).follow_links(false) {
+        let entry = entry.map_err(|error| {
+            let path = error
+                .path()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| path.to_path_buf());
+            SlopError::FileReadFailure {
+                path,
+                source: std::io::Error::other(error.to_string()),
+            }
+        })?;
+        if entry.file_type().is_file() {
             include_file(entry.path(), seen, files, forced_seen, forced_files)?;
         }
     }

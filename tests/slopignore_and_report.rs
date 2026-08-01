@@ -174,13 +174,17 @@ fn slopinclude_forces_local_and_home_files_without_duplicates() {
     let output_dir = temp.path().join("out");
     let forced = root.join("dir1/dir2/dir3/file3.md");
     let explicit = root.join("dir1/file1.txt");
-    let external = home.join("external/file6.md");
-    fs::create_dir_all(external.parent().expect("external parent"))
+    let external = home.join("external");
+    let external_file = external.join("file6.md");
+    let nested_external_file = external.join("nested/file7.md");
+    fs::create_dir_all(nested_external_file.parent().expect("external parent"))
         .expect("external directory should be created");
-    fs::write(&external, "external-marker").expect("external file should be written");
+    fs::write(&external_file, "external-marker").expect("external file should be written");
+    fs::write(&nested_external_file, "nested-directory-marker")
+        .expect("nested external file should be written");
     fs::write(
         root.join(".slopignore"),
-        "dir1/\n+ dir1/dir2/dir3/file3.md\nslopinclude dir1/dir2/dir3/file3.md\nslopinclude $HOME/external/file6.md\n",
+        "dir1/\n+ dir1/dir2/dir3/file3.md\nslopinclude dir1/dir2/dir3/file3.md\nslopinclude $HOME/external/\n",
     )
     .expect("slopignore should be written");
 
@@ -203,6 +207,11 @@ fn slopinclude_forces_local_and_home_files_without_duplicates() {
         slop.matches("external-marker").count(),
         1,
         "$HOME include is bundled once"
+    );
+    assert_eq!(
+        slop.matches("nested-directory-marker").count(),
+        1,
+        "$HOME directory includes nested files"
     );
     assert!(
         slop.contains("one"),

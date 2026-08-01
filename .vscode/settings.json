@@ -1,0 +1,14 @@
+{
+  "[slopignore]": {
+    "editor.tokenColorCustomizations": {
+      "textMateRules": [
+        {
+          "scope": "keyword.control.slopinclude",
+          "settings": {
+            "foreground": "#FFD700"
+          }
+        }
+      ]
+    }
+  }
+}

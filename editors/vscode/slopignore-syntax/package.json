@@ -1,0 +1,35 @@
+{
+  "name": "slopignore-syntax",
+  "displayName": "SlopIgnore Syntax",
+  "description": "Syntax highlighting for SlopIgnore include directives.",
+  "version": "0.1.0",
+  "publisher": "slop",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "slopignore",
+        "aliases": [
+          "SlopIgnore",
+          "slopignore"
+        ],
+        "filenames": [
+          ".slopignore"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "slopignore",
+        "scopeName": "source.slopignore",
+        "path": "./syntaxes/slopignore.tmLanguage.json"
+      }
+    ]
+  }
+}
