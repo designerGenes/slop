@@ -75,16 +75,12 @@ pub fn render_walk_tree(
     };
 
     for path in included {
-        if let Some(components) = relative_components(root, path) {
-            tree.insert(&components, false, false);
-        }
+        tree.insert(&tree_components(root, path), false, false);
     }
 
     if verbose {
         for entry in ignored {
-            if let Some(components) = relative_components(root, &entry.path) {
-                tree.insert(&components, entry.is_dir, true);
-            }
+            tree.insert(&tree_components(root, &entry.path), entry.is_dir, true);
         }
     }
 
@@ -147,6 +143,19 @@ fn relative_components(root: &Path, path: &Path) -> Option<Vec<String>> {
     } else {
         Some(components)
     }
+}
+
+/// Keep the requested input root stable while still showing forced includes
+/// that live elsewhere on disk.
+fn tree_components(root: &Path, path: &Path) -> Vec<String> {
+    relative_components(root, path).unwrap_or_else(|| {
+        let mut components = vec!["[external]".to_string()];
+        components.extend(
+            path.components()
+                .map(|component| component.as_os_str().to_string_lossy().to_string()),
+        );
+        components
+    })
 }
 
 /// Deepest directory containing every path in `paths`.
@@ -230,6 +239,22 @@ mod tests {
                         └── file5.js\n";
 
         assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn renders_external_files_under_a_dedicated_branch() {
+        let root = PathBuf::from("/tmp/project_root");
+        let included = vec![
+            root.join("keep.txt"),
+            PathBuf::from("/Users/example/shared/contract.md"),
+        ];
+
+        let rendered = render_walk_tree(&root, &included, &[], false, false);
+
+        assert!(rendered.contains("[external]"));
+        assert!(rendered.contains("Users"));
+        assert!(rendered.contains("contract.md"));
+        assert!(rendered.contains("keep.txt"));
     }
 
     #[test]

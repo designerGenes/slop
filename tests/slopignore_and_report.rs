@@ -219,6 +219,33 @@ fn slopinclude_forces_local_and_home_files_without_duplicates() {
     );
 }
 
+#[test]
+fn run_report_shows_external_slopinclude_files() {
+    let temp = fixture();
+    let home = temp.path().join("home");
+    let root = temp.path().join("project_root");
+    let output_dir = temp.path().join("out");
+    let external = home.join("external/file6.md");
+    fs::create_dir_all(external.parent().expect("external parent"))
+        .expect("external directory should be created");
+    fs::write(&external, "external-marker").expect("external file should be written");
+    fs::write(
+        root.join(".slopignore"),
+        "slopinclude $HOME/external/\n",
+    )
+    .expect("slopignore should be written");
+
+    cargo_bin(&home)
+        .current_dir(&root)
+        .args(["-o"])
+        .arg(&output_dir)
+        .arg(".")
+        .assert()
+        .success()
+        .stderr(contains("[external]"))
+        .stderr(contains("file6.md"));
+}
+
 fn read_only_slop(output_dir: &Path) -> String {
     let entry = fs::read_dir(output_dir)
         .expect("output dir should exist")
