@@ -54,6 +54,9 @@ pub struct IgnoredEntry {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WalkReport {
     pub files: Vec<PathBuf>,
+    /// Files supplied by a `slopinclude` directive. Selection modes append
+    /// these after their own result so the directive remains authoritative.
+    pub forced_files: Vec<PathBuf>,
     pub ignored: Vec<IgnoredEntry>,
 }
 

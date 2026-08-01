@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -39,7 +40,11 @@ pub fn run_slop(args: &CliArgs, config: &Config) -> Result<PathBuf, SlopError> {
         }
     }
 
-    let max_depth = if args.recursive { Some(usize::MAX) } else { Some(0) };
+    let max_depth = if args.recursive {
+        Some(usize::MAX)
+    } else {
+        Some(0)
+    };
     let respect_gitignore = should_respect_gitignore(args.respect_gitignore, config);
     let walk = collect_source_files_reporting(
         &resolved_inputs,
@@ -48,24 +53,20 @@ pub fn run_slop(args: &CliArgs, config: &Config) -> Result<PathBuf, SlopError> {
         respect_gitignore,
     )?;
     let candidate_files = walk.files;
+    let forced_files = walk.forced_files;
     let ignored_entries = walk.ignored;
     if candidate_files.is_empty() {
         return Err(SlopError::InputExpandedToZeroFiles);
     }
 
-    let corpus_root = graph::shared_git_root(&candidate_files)
-        .unwrap_or_else(|| resolved_inputs[0].clone());
+    let corpus_root =
+        graph::shared_git_root(&candidate_files).unwrap_or_else(|| resolved_inputs[0].clone());
 
-    let (files, selection_meta) = if selection::selection_mode(args) {
+    let (mut files, selection_meta) = if selection::selection_mode(args) {
         let selectors = selection::build_selectors(args, config)?;
         let map_reserve = selection::budget::estimate_map_reserve(config);
-        let sel = selection::select_files(
-            &selectors,
-            &corpus_root,
-            map_reserve,
-            config,
-            args.reindex,
-        )?;
+        let sel =
+            selection::select_files(&selectors, &corpus_root, map_reserve, config, args.reindex)?;
 
         for dropped in &sel.dropped {
             eprintln!(
@@ -94,6 +95,16 @@ pub fn run_slop(args: &CliArgs, config: &Config) -> Result<PathBuf, SlopError> {
         (candidate_files, Vec::new())
     };
 
+    // Selection may replace the ordinary walk result, but .slopignore include
+    // directives are unconditional and must remain in every generated slop.
+    let mut seen = BTreeSet::new();
+    files.retain(|path| seen.insert(path.clone()));
+    for path in forced_files {
+        if seen.insert(path.clone()) {
+            files.push(path);
+        }
+    }
+
     let verbose = args.verbose || config.verbose_output;
     if !args.silent {
         print_slop_tree(&resolved_inputs, &files, &ignored_entries, verbose);
@@ -104,12 +115,16 @@ pub fn run_slop(args: &CliArgs, config: &Config) -> Result<PathBuf, SlopError> {
         .map(build_source_file)
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut source_files = secrets::enforce(&source_files, config, args.allow_secrets, args.redact)?;
+    let mut source_files =
+        secrets::enforce(&source_files, config, args.allow_secrets, args.redact)?;
 
     for ctx_path in &args.context_files {
         let resolved = resolve_absolute(ctx_path, &cwd)?;
         if !resolved.exists() {
-            eprintln!("warning: context file {} not found, skipping", resolved.display());
+            eprintln!(
+                "warning: context file {} not found, skipping",
+                resolved.display()
+            );
             continue;
         }
         let mut sf = build_source_file(&resolved)?;
@@ -171,12 +186,7 @@ fn tree_root(inputs: &[PathBuf], all: &[PathBuf]) -> PathBuf {
 ///
 /// This goes to stderr, alongside the logo and the warnings, so that stdout
 /// stays free for machine consumption.
-fn print_slop_tree(
-    inputs: &[PathBuf],
-    files: &[PathBuf],
-    ignored: &[IgnoredEntry],
-    verbose: bool,
-) {
+fn print_slop_tree(inputs: &[PathBuf], files: &[PathBuf], ignored: &[IgnoredEntry], verbose: bool) {
     let mut all: Vec<PathBuf> = files.to_vec();
     if verbose {
         all.extend(ignored.iter().map(|entry| entry.path.clone()));

@@ -10,14 +10,16 @@
 //! Discovery is intentionally narrow and predictable: slop looks for a single
 //! `.slopignore`, starting at the walked directory and climbing ancestors only
 //! while still inside the containing git repository (stopping at, and
-//! including, the repo root). Outside a git repo, only the walked directory
-//! itself is consulted — slop will never silently pick up a stray
-//! `.slopignore` from `$HOME` or `/`.
+//! including, the repo root). Outside a git repo, the walked directory and the
+//! invocation directory are consulted — slop will never silently pick up a
+//! stray `.slopignore` from `$HOME` or `/`.
 //!
 //! `.slopignore` applies to *directory walks* only. A file named explicitly on
 //! the command line is always slopped; if you asked for it by name, you meant
-//! it.
+//! it. Its `slopinclude` directives still apply when that file is beneath the
+//! directory where the command was invoked.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
@@ -29,6 +31,8 @@ pub const SLOPIGNORE_FILE_NAME: &str = ".slopignore";
 /// use it unconditionally.
 pub struct SlopIgnore {
     matcher: Option<Gitignore>,
+    include_matcher: Option<Gitignore>,
+    explicit_includes: Vec<PathBuf>,
     source: Option<PathBuf>,
 }
 
@@ -36,6 +40,8 @@ impl SlopIgnore {
     pub fn empty() -> Self {
         Self {
             matcher: None,
+            include_matcher: None,
+            explicit_includes: Vec::new(),
             source: None,
         }
     }
@@ -53,27 +59,75 @@ impl SlopIgnore {
             return Self::empty();
         };
 
+        let contents = match fs::read_to_string(&source) {
+            Ok(contents) => contents,
+            Err(error) => {
+                eprintln!(
+                    "warning: could not read {}: {error}; continuing without it",
+                    source.display()
+                );
+                return Self::empty();
+            }
+        };
+
         let mut builder = GitignoreBuilder::new(root);
-        if let Some(error) = builder.add(&source) {
-            eprintln!(
-                "warning: could not read {}: {error}; continuing without it",
-                source.display()
-            );
-            return Self::empty();
+        let mut include_builder = GitignoreBuilder::new(root);
+        let mut has_local_includes = false;
+        let mut explicit_includes = Vec::new();
+        for line in contents.lines() {
+            if let Some(pattern) = include_pattern(line) {
+                let expanded = crate::pathing::expand_tilde(Path::new(pattern));
+                if expanded.is_absolute() {
+                    explicit_includes.push(crate::pathing::normalize_path(&expanded));
+                } else {
+                    if let Err(error) = include_builder.add_line(Some(source.clone()), pattern) {
+                        eprintln!(
+                            "warning: could not compile slopinclude in {}: {error}; continuing without it",
+                            source.display()
+                        );
+                        return Self::empty();
+                    }
+                    has_local_includes = true;
+                }
+            } else if let Err(error) = builder.add_line(Some(source.clone()), line) {
+                eprintln!(
+                    "warning: could not read {}: {error}; continuing without it",
+                    source.display()
+                );
+                return Self::empty();
+            }
         }
 
-        match builder.build() {
-            Ok(matcher) => Self {
-                matcher: Some(matcher),
-                source: Some(source),
-            },
+        let matcher = match builder.build() {
+            Ok(matcher) => matcher,
             Err(error) => {
                 eprintln!(
                     "warning: could not compile {}: {error}; continuing without it",
                     source.display()
                 );
-                Self::empty()
+                return Self::empty();
             }
+        };
+        let include_matcher = if has_local_includes {
+            match include_builder.build() {
+                Ok(matcher) => Some(matcher),
+                Err(error) => {
+                    eprintln!(
+                        "warning: could not compile slopinclude in {}: {error}; continuing without it",
+                        source.display()
+                    );
+                    return Self::empty();
+                }
+            }
+        } else {
+            None
+        };
+
+        Self {
+            matcher: Some(matcher),
+            include_matcher,
+            explicit_includes,
+            source: Some(source),
         }
     }
 
@@ -100,6 +154,43 @@ impl SlopIgnore {
         let relative = path.strip_prefix(matcher.path()).unwrap_or(path);
         matcher.matched(relative, is_dir).is_ignore()
     }
+
+    /// Whether a local `slopinclude` directive matches `path`. Include rules
+    /// use the same gitignore-style syntax and root as ordinary ignore rules.
+    pub fn is_included(&self, path: &Path, is_dir: bool) -> bool {
+        let Some(matcher) = self.include_matcher.as_ref() else {
+            return false;
+        };
+
+        let relative = path.strip_prefix(matcher.path()).unwrap_or(path);
+        matcher
+            .matched_path_or_any_parents(relative, is_dir)
+            .is_ignore()
+    }
+
+    /// Directory that local include rules are evaluated beneath.
+    pub fn include_root(&self) -> Option<&Path> {
+        self.include_matcher.as_ref().map(|matcher| matcher.path())
+    }
+
+    /// Absolute files named by `slopinclude` directives.
+    pub fn explicit_includes(&self) -> &[PathBuf] {
+        &self.explicit_includes
+    }
+}
+
+/// Extract the pattern from either supported include-directive spelling.
+fn include_pattern(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    if let Some(pattern) = trimmed.strip_prefix('+') {
+        return (!pattern.trim().is_empty()).then_some(pattern.trim_start());
+    }
+
+    let pattern = trimmed.strip_prefix("slopinclude")?;
+    if !pattern.chars().next().is_some_and(char::is_whitespace) {
+        return None;
+    }
+    (!pattern.trim().is_empty()).then_some(pattern.trim_start())
 }
 
 /// Walk from `input` up to the containing git root looking for a
@@ -119,8 +210,19 @@ fn find_slopignore(input: &Path) -> Option<PathBuf> {
             // Reached the repo root without a hit: stop, do not escape the repo.
             Some(root) if is_same_dir(dir, root) => return None,
             Some(_) => current = dir.parent(),
-            // Not inside a repo: consult only the directory we were pointed at.
-            None => return None,
+            // Not inside a repo: a direct child input should still inherit the
+            // invocation directory's .slopignore, but never an arbitrary
+            // ancestor such as $HOME.
+            None => {
+                let cwd = std::env::current_dir().ok();
+                if let Some(cwd) = cwd.filter(|cwd| is_within_dir(&start, cwd)) {
+                    let candidate = cwd.join(SLOPIGNORE_FILE_NAME);
+                    if candidate.is_file() {
+                        return Some(candidate);
+                    }
+                }
+                return None;
+            }
         }
     }
 
@@ -147,6 +249,16 @@ fn is_same_dir(left: &Path, right: &Path) -> bool {
     }
     match (left.canonicalize(), right.canonicalize()) {
         (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn is_within_dir(path: &Path, directory: &Path) -> bool {
+    if path.starts_with(directory) {
+        return true;
+    }
+    match (path.canonicalize(), directory.canonicalize()) {
+        (Ok(path), Ok(directory)) => path.starts_with(directory),
         _ => false,
     }
 }
@@ -191,15 +303,32 @@ mod tests {
     fn supports_negation_like_gitignore() {
         let temp = tempdir().expect("tempdir");
         let root = temp.path();
-        fs::write(
-            root.join(SLOPIGNORE_FILE_NAME),
-            "*.md\n!README.md\n",
-        )
-        .expect("slopignore should be written");
+        fs::write(root.join(SLOPIGNORE_FILE_NAME), "*.md\n!README.md\n")
+            .expect("slopignore should be written");
 
         let ignore = SlopIgnore::discover(root);
         assert!(ignore.is_ignored(&root.join("NOTES.md"), false));
         assert!(!ignore.is_ignored(&root.join("README.md"), false));
+    }
+
+    #[test]
+    fn parses_both_slopinclude_directive_spellings() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+        fs::write(
+            root.join(SLOPIGNORE_FILE_NAME),
+            "*.md\n+ forced.md\nslopinclude nested/also.md\n",
+        )
+        .expect("slopignore should be written");
+
+        let ignore = SlopIgnore::discover(root);
+        assert!(ignore.is_ignored(&root.join("forced.md"), false));
+        assert!(ignore.is_included(&root.join("forced.md"), false));
+        assert!(ignore.is_included(&root.join("nested/also.md"), false));
+        assert!(
+            !ignore.is_ignored(&root.join("slopinclude"), false),
+            "the directive must not be compiled as an ordinary ignore rule"
+        );
     }
 
     #[test]

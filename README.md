@@ -86,6 +86,16 @@ This walks the directory the same way `git` would: any file or folder matched by
 respect_gitignore: true
 ```
 
+Use a project `.slopignore` for slop-specific exclusions. It accepts `.gitignore`-style patterns, plus `+ pattern` or `slopinclude pattern` to force a matching file into every slop. Includes override `.slopignore` and `.gitignore` filtering, bypass shallow traversal, and may name an external file through `$HOME`:
+
+```text
+generated/
++ generated/required-schema.json
+slopinclude $HOME/shared/api-contract.md
+```
+
+Files explicitly listed on the command line and matched by one or more include rules are bundled only once.
+
 ---
 
 ### 5. Add a whole-repo code graph

@@ -5,7 +5,18 @@ use assert_cmd::Command;
 use tempfile::tempdir;
 
 fn cargo_bin() -> Command {
-    Command::cargo_bin("slop").expect("binary should build")
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT_HOME: AtomicUsize = AtomicUsize::new(0);
+    let home = std::env::temp_dir().join(format!(
+        "slop-cli-test-{}-{}",
+        std::process::id(),
+        NEXT_HOME.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&home).expect("test home should be created");
+    let mut command = Command::cargo_bin("slop").expect("binary should build");
+    command.env("HOME", home).env("SLOP_DESLOP_CACHE", "off");
+    command
 }
 
 #[test]

@@ -69,7 +69,10 @@ fn slopignore_prunes_files_without_any_flag() {
         .success();
 
     let slop = read_only_slop(&output_dir);
-    assert!(slop.contains("file5.js"), "unignored files are still slopped");
+    assert!(
+        slop.contains("file5.js"),
+        "unignored files are still slopped"
+    );
     assert!(
         !slop.contains("file3.md"),
         ".slopignore should prune without --respect-gitignore"
@@ -161,6 +164,50 @@ fn slopignore_supports_negation() {
     let slop = read_only_slop(&output_dir);
     assert!(slop.contains("file1.txt"), "negated pattern should be kept");
     assert!(!slop.contains("file2.txt"), "*.txt should otherwise prune");
+}
+
+#[test]
+fn slopinclude_forces_local_and_home_files_without_duplicates() {
+    let temp = fixture();
+    let home = temp.path().join("home");
+    let root = temp.path().join("project_root");
+    let output_dir = temp.path().join("out");
+    let forced = root.join("dir1/dir2/dir3/file3.md");
+    let explicit = root.join("dir1/file1.txt");
+    let external = home.join("external/file6.md");
+    fs::create_dir_all(external.parent().expect("external parent"))
+        .expect("external directory should be created");
+    fs::write(&external, "external-marker").expect("external file should be written");
+    fs::write(
+        root.join(".slopignore"),
+        "dir1/\n+ dir1/dir2/dir3/file3.md\nslopinclude dir1/dir2/dir3/file3.md\nslopinclude $HOME/external/file6.md\n",
+    )
+    .expect("slopignore should be written");
+
+    cargo_bin(&home)
+        .current_dir(&root)
+        .args(["-o"])
+        .arg(&output_dir)
+        .arg(&explicit)
+        .arg(&forced)
+        .assert()
+        .success();
+
+    let slop = read_only_slop(&output_dir);
+    assert_eq!(
+        slop.matches("three").count(),
+        1,
+        "forced file is bundled once"
+    );
+    assert_eq!(
+        slop.matches("external-marker").count(),
+        1,
+        "$HOME include is bundled once"
+    );
+    assert!(
+        slop.contains("one"),
+        "the explicitly named file remains in the slop"
+    );
 }
 
 fn read_only_slop(output_dir: &Path) -> String {

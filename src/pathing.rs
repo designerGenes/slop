@@ -51,9 +51,9 @@ pub struct ExclusionMatcher {
 
 #[derive(Debug)]
 enum ExclusionPattern {
-    Glob(String),        // File pattern like "*.swift"
-    Folder(String),      // Folder name like "folder2"
-    Regex(Regex),        // Regular expression
+    Glob(String),   // File pattern like "*.swift"
+    Folder(String), // Folder name like "folder2"
+    Regex(Regex),   // Regular expression
 }
 
 impl ExclusionMatcher {
@@ -62,9 +62,7 @@ impl ExclusionMatcher {
         for pattern in patterns {
             matchers.push(Self::compile_pattern(pattern));
         }
-        ExclusionMatcher {
-            patterns: matchers,
-        }
+        ExclusionMatcher { patterns: matchers }
     }
 
     fn compile_pattern(pattern: &str) -> ExclusionPattern {
@@ -91,10 +89,7 @@ impl ExclusionMatcher {
     }
 
     pub fn should_exclude(&self, path: &Path) -> bool {
-        let filename = path
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or("");
+        let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
 
         for pattern in &self.patterns {
             match pattern {
@@ -170,6 +165,14 @@ pub fn expand_tilde(path: &Path) -> PathBuf {
             return PathBuf::from(home).join(rest);
         }
     }
+    if let Some(rest) = s
+        .strip_prefix("$HOME/")
+        .or_else(|| s.strip_prefix("${HOME}/"))
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
     path.to_path_buf()
 }
 
@@ -215,6 +218,8 @@ pub fn collect_source_files_reporting(
 ) -> Result<WalkReport, SlopError> {
     let mut seen = BTreeSet::new();
     let mut files = Vec::new();
+    let mut forced_seen = BTreeSet::new();
+    let mut forced_files = Vec::new();
     let ignored: IgnoredSink = Arc::new(Mutex::new(Vec::new()));
     let exclusion_matcher = ExclusionMatcher::new(exclude);
 
@@ -233,9 +238,17 @@ pub fn collect_source_files_reporting(
             &slopignore,
             &ignored,
         )?;
+        collect_includes(
+            &slopignore,
+            &mut seen,
+            &mut files,
+            &mut forced_seen,
+            &mut forced_files,
+        )?;
     }
 
     files.sort_by(compare_paths_for_output);
+    forced_files.sort_by(compare_paths_for_output);
 
     let mut ignored = ignored
         .lock()
@@ -244,7 +257,110 @@ pub fn collect_source_files_reporting(
     ignored.sort_by(|left, right| compare_paths_for_output(&left.path, &right.path));
     ignored.dedup_by(|left, right| left.path == right.path);
 
-    Ok(WalkReport { files, ignored })
+    Ok(WalkReport {
+        files,
+        forced_files,
+        ignored,
+    })
+}
+
+/// Add all files matched by the active `.slopignore`'s include directives.
+/// This runs separately from the ordinary walk so a matching file can be
+/// rescued from a pruned directory, shallow traversal, or `.gitignore`.
+fn collect_includes(
+    slopignore: &SlopIgnore,
+    seen: &mut BTreeSet<PathBuf>,
+    files: &mut Vec<PathBuf>,
+    forced_seen: &mut BTreeSet<PathBuf>,
+    forced_files: &mut Vec<PathBuf>,
+) -> Result<(), SlopError> {
+    for path in slopignore.explicit_includes() {
+        include_file(path, seen, files, forced_seen, forced_files)?;
+    }
+
+    let Some(root) = slopignore.include_root() else {
+        return Ok(());
+    };
+    for entry in WalkDir::new(root).follow_links(false) {
+        let entry = entry.map_err(|error| {
+            let path = error
+                .path()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| root.to_path_buf());
+            SlopError::FileReadFailure {
+                path,
+                source: std::io::Error::other(error.to_string()),
+            }
+        })?;
+        if entry.file_type().is_file() && slopignore.is_included(entry.path(), false) {
+            include_file(entry.path(), seen, files, forced_seen, forced_files)?;
+        }
+    }
+    Ok(())
+}
+
+fn include_file(
+    path: &Path,
+    seen: &mut BTreeSet<PathBuf>,
+    files: &mut Vec<PathBuf>,
+    forced_seen: &mut BTreeSet<PathBuf>,
+    forced_files: &mut Vec<PathBuf>,
+) -> Result<(), SlopError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(SlopError::FileReadFailure {
+                path: path.to_path_buf(),
+                source: error,
+            });
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Ok(());
+    }
+    if !is_plaintext(path) {
+        eprintln!("warning: skipping non-text file: {}", path.display());
+        return Ok(());
+    }
+
+    let path = equivalent_seen_path(seen, path)
+        .cloned()
+        .unwrap_or_else(|| path.to_path_buf());
+    if insert_unique_path(forced_seen, &path) {
+        forced_files.push(path.clone());
+    }
+    if insert_unique_path(seen, &path) {
+        files.push(path);
+    }
+    Ok(())
+}
+
+/// Insert a path unless a different spelling already refers to the same file.
+/// macOS exposes temporary files through both `/var` and `/private/var`; local
+/// include scans can otherwise duplicate an explicitly named file.
+fn insert_unique_path(seen: &mut BTreeSet<PathBuf>, path: &Path) -> bool {
+    if seen.contains(path) {
+        return false;
+    }
+    let canonical = path.canonicalize().ok();
+    if canonical.is_some()
+        && seen
+            .iter()
+            .filter_map(|existing| existing.canonicalize().ok())
+            .any(|existing| Some(existing) == canonical)
+    {
+        return false;
+    }
+    seen.insert(path.to_path_buf())
+}
+
+fn equivalent_seen_path<'a>(seen: &'a BTreeSet<PathBuf>, path: &Path) -> Option<&'a PathBuf> {
+    seen.get(path).or_else(|| {
+        let canonical = path.canonicalize().ok()?;
+        seen.iter()
+            .find(|existing| existing.canonicalize().ok().as_ref() == Some(&canonical))
+    })
 }
 
 fn record_ignored(sink: &IgnoredSink, path: &Path, is_dir: bool, reason: IgnoreReason) {
@@ -284,7 +400,12 @@ pub fn build_output_filename(files: &[PathBuf], has_graph: bool) -> Result<Strin
         joined.hash(&mut hasher);
         let hash = hasher.finish();
         let truncated = joined.chars().take(max_filename_len).collect::<String>();
-        Ok(format!("{}{}_{}.md", truncated, suffix, format!("{:x}", hash)))
+        Ok(format!(
+            "{}{}_{}.md",
+            truncated,
+            suffix,
+            format!("{:x}", hash)
+        ))
     }
 }
 
@@ -342,7 +463,7 @@ fn collect_path(
     // A file named explicitly on the command line is always slopped:
     // .slopignore governs directory walks, not deliberate requests.
     if metadata.is_file() {
-        if !exclusion_matcher.should_exclude(input) && seen.insert(input.to_path_buf()) {
+        if !exclusion_matcher.should_exclude(input) && insert_unique_path(seen, input) {
             files.push(input.to_path_buf());
         }
         return Ok(());
@@ -406,9 +527,7 @@ fn max_allowed_depth(max_depth: usize, input: &Path) -> usize {
 /// this also works for worktrees and submodules. Symlinks are not followed
 /// on the climb, matching how `ignore::WalkBuilder` resolves parent paths.
 pub(crate) fn containing_git_root(input: &Path) -> Option<PathBuf> {
-    let start = input
-        .canonicalize()
-        .unwrap_or_else(|_| input.to_path_buf());
+    let start = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
     let mut current: &Path = &start;
     loop {
         if current.join(".git").exists() {
@@ -484,12 +603,11 @@ fn collect_dir(
             continue;
         }
 
-        let entry_metadata = fs::symlink_metadata(entry_path).map_err(|error| {
-            SlopError::FileReadFailure {
+        let entry_metadata =
+            fs::symlink_metadata(entry_path).map_err(|error| SlopError::FileReadFailure {
                 path: entry_path.to_path_buf(),
                 source: error,
-            }
-        })?;
+            })?;
 
         let entry_type = entry_metadata.file_type();
         if entry_type.is_symlink() {
@@ -514,7 +632,7 @@ fn collect_dir(
                 eprintln!("warning: skipping non-text file: {}", entry_path.display());
                 continue;
             }
-            if seen.insert(entry_path.to_path_buf()) {
+            if insert_unique_path(seen, entry_path) {
                 files.push(entry_path.to_path_buf());
             }
         }
@@ -610,12 +728,11 @@ fn collect_dir_respecting_gitignore(
         }
 
         let entry_path = entry.path();
-        let entry_metadata = fs::symlink_metadata(entry_path).map_err(|error| {
-            SlopError::FileReadFailure {
+        let entry_metadata =
+            fs::symlink_metadata(entry_path).map_err(|error| SlopError::FileReadFailure {
                 path: entry_path.to_path_buf(),
                 source: error,
-            }
-        })?;
+            })?;
 
         let entry_type = entry_metadata.file_type();
         if entry_type.is_symlink() {
@@ -640,7 +757,7 @@ fn collect_dir_respecting_gitignore(
                 eprintln!("warning: skipping non-text file: {}", entry_path.display());
                 continue;
             }
-            if seen.insert(entry_path.to_path_buf()) {
+            if insert_unique_path(seen, entry_path) {
                 files.push(entry_path.to_path_buf());
             }
         }
@@ -695,9 +812,7 @@ fn has_packed_byte_array(bytes: &[u8]) -> bool {
     if bytes.len() < MARKER.len() {
         return false;
     }
-    bytes
-        .windows(MARKER.len())
-        .any(|window| window == MARKER)
+    bytes.windows(MARKER.len()).any(|window| window == MARKER)
 }
 
 fn compare_paths_for_output(left: &PathBuf, right: &PathBuf) -> std::cmp::Ordering {
@@ -777,9 +892,8 @@ mod tests {
         fs::write(root.join(".hidden"), "secret").expect("file should be written");
         fs::write(root.join("nested/deeper/file.md"), "nested").expect("file should be written");
 
-        let files =
-            collect_source_files(std::slice::from_ref(&root), Some(usize::MAX), &[], false)
-                .expect("files should collect");
+        let files = collect_source_files(std::slice::from_ref(&root), Some(usize::MAX), &[], false)
+            .expect("files should collect");
 
         assert_eq!(files.len(), 3);
         assert!(files.contains(&root.join("visible.txt")));
@@ -1030,11 +1144,7 @@ mod tests {
         fs::write(repo.join(".gitignore"), "*.png\n.DS_Store\n").expect("gitignore written");
         fs::write(repo.join("FEATURES/.DS_Store"), "noise").expect("ds written");
         fs::write(repo.join("FEATURES/keep.md"), "keep").expect("keep written");
-        fs::write(
-            repo.join("FEATURES/screenshots/Screenshot.png"),
-            "binary",
-        )
-        .expect("png written");
+        fs::write(repo.join("FEATURES/screenshots/Screenshot.png"), "binary").expect("png written");
 
         let input = repo.join("FEATURES");
         let files = collect_source_files(&[input], Some(usize::MAX), &[], true)
@@ -1122,7 +1232,12 @@ mod tests {
             .expect("collection should succeed");
 
         assert!(report.files.contains(&root.join("keep.rs")));
-        assert!(!report.files.iter().any(|path| path.starts_with(root.join("vendor"))));
+        assert!(
+            !report
+                .files
+                .iter()
+                .any(|path| path.starts_with(root.join("vendor")))
+        );
         assert_eq!(
             report.ignored.len(),
             1,
@@ -1131,6 +1246,30 @@ mod tests {
         assert_eq!(report.ignored[0].path, root.join("vendor"));
         assert!(report.ignored[0].is_dir);
         assert_eq!(report.ignored[0].reason, IgnoreReason::SlopIgnore);
+    }
+
+    #[test]
+    fn slopinclude_overrides_an_ignored_directory_and_walk_depth() {
+        let temp = tempdir().expect("temp dir should be created");
+        let root = temp.path().to_path_buf();
+        let forced = root.join("generated/deep/forced.rs");
+        fs::create_dir_all(forced.parent().expect("forced parent"))
+            .expect("directories should be created");
+        fs::write(&forced, "forced").expect("file should be written");
+        fs::write(
+            root.join(".slopignore"),
+            "generated/\n+ generated/deep/forced.rs\n",
+        )
+        .expect("slopignore should be written");
+
+        let report = collect_source_files_reporting(&[root], Some(0), &[], false)
+            .expect("collection should succeed");
+
+        assert!(
+            report.files.contains(&forced),
+            "an include overrides the ignored parent and shallow walk"
+        );
+        assert_eq!(report.forced_files, vec![forced]);
     }
 
     #[test]
