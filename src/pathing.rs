@@ -293,6 +293,11 @@ fn collect_includes(
             }
         })?;
         if entry.file_type().is_file() && slopignore.is_included(entry.path(), false) {
+            if is_slopignore_file(entry.path())
+                && !slopignore.is_explicit_slopignore_included(entry.path())
+            {
+                continue;
+            }
             include_file(entry.path(), seen, files, forced_seen, forced_files)?;
         }
     }
@@ -670,7 +675,7 @@ fn collect_dir(
                     continue;
                 }
             }
-            if crate::slop_format::is_slop_file(entry_path) {
+            if crate::slop_format::is_slop_file(entry_path) || is_slopignore_file(entry_path) {
                 continue;
             }
             if !is_plaintext(entry_path) {
@@ -798,7 +803,7 @@ fn collect_dir_respecting_gitignore(
                     continue;
                 }
             }
-            if crate::slop_format::is_slop_file(entry_path) {
+            if crate::slop_format::is_slop_file(entry_path) || is_slopignore_file(entry_path) {
                 continue;
             }
             if !is_plaintext(entry_path) {
@@ -812,6 +817,14 @@ fn collect_dir_respecting_gitignore(
     }
     Ok(())
 }
+
+fn is_slopignore_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name == crate::slopignore::SLOPIGNORE_FILE_NAME)
+        .unwrap_or(false)
+}
+
 
 /// Heuristic check used while walking a directory: a file is treated as
 /// non-text (and skipped from the slop) if its leading bytes contain a NUL

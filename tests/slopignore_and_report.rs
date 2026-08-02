@@ -278,6 +278,84 @@ fn subfolder_invocation_does_not_inherit_parent_slopignore() {
     );
 }
 
+#[test]
+fn slopignore_files_are_automatically_ignored_by_default() {
+    let temp = fixture();
+    let home = temp.path().join("home");
+    let root = temp.path().join("project_root");
+    let output_dir = temp.path().join("out");
+    fs::write(root.join(".slopignore"), "*.log\n").expect("slopignore should be written");
+
+    cargo_bin(&home)
+        .current_dir(&root)
+        .args(["-r", "-o"])
+        .arg(&output_dir)
+        .arg(".")
+        .assert()
+        .success();
+
+    let slop = read_only_slop(&output_dir);
+    assert!(
+        !slop.contains(".slopignore"),
+        ".slopignore should be automatically ignored from the slop output bundle by default"
+    );
+}
+
+#[test]
+fn slopignore_is_included_when_explicitly_slopincluded() {
+    let temp = fixture();
+    let home = temp.path().join("home");
+    let root = temp.path().join("project_root");
+    let output_dir = temp.path().join("out");
+    fs::write(root.join(".slopignore"), "*.log\n+ .slopignore\n").expect("slopignore should be written");
+
+    cargo_bin(&home)
+        .current_dir(&root)
+        .args(["-r", "-o"])
+        .arg(&output_dir)
+        .arg(".")
+        .assert()
+        .success();
+
+    let slop = read_only_slop(&output_dir);
+    assert!(
+        slop.contains(".slopignore"),
+        ".slopignore should be included when explicitly named in a slopinclude directive"
+    );
+}
+
+#[test]
+fn subfolder_slopignore_files_are_ignored_by_default_and_during_directory_includes() {
+    let temp = fixture();
+    let home = temp.path().join("home");
+    let root = temp.path().join("project_root");
+    let subfolder = root.join("sub1");
+    let output_dir = temp.path().join("out");
+
+    fs::create_dir_all(&subfolder).expect("subfolder should exist");
+    fs::write(root.join(".slopignore"), "+ sub1\n").expect("root slopignore");
+    fs::write(subfolder.join(".slopignore"), "*.tmp\n").expect("subfolder slopignore");
+    fs::write(subfolder.join("file3.md"), "content").expect("file3 should be written");
+
+    cargo_bin(&home)
+        .current_dir(&root)
+        .args(["-r", "-o"])
+        .arg(&output_dir)
+        .arg(".")
+        .assert()
+        .success();
+
+    let slop = read_only_slop(&output_dir);
+    assert!(
+        slop.contains("file3.md"),
+        "sub1/file3.md should be included"
+    );
+    assert!(
+        !slop.contains("sub1/.slopignore"),
+        "sub1/.slopignore must be automatically ignored even when sub1 is included"
+    );
+}
+
 
 fn read_only_slop(output_dir: &Path) -> String {
     let entry = fs::read_dir(output_dir)

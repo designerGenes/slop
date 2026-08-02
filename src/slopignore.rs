@@ -31,6 +31,7 @@ pub struct SlopIgnore {
     matcher: Option<Gitignore>,
     include_matcher: Option<Gitignore>,
     explicit_includes: Vec<PathBuf>,
+    has_explicit_slopignore_include: bool,
     source: Option<PathBuf>,
 }
 
@@ -40,6 +41,7 @@ impl SlopIgnore {
             matcher: None,
             include_matcher: None,
             explicit_includes: Vec::new(),
+            has_explicit_slopignore_include: false,
             source: None,
         }
     }
@@ -71,14 +73,22 @@ impl SlopIgnore {
         let mut builder = GitignoreBuilder::new(root);
         let mut include_builder = GitignoreBuilder::new(root);
         let mut has_local_includes = false;
+        let mut has_explicit_slopignore_include = false;
         let mut explicit_includes = Vec::new();
         for line in contents.lines() {
             if let Some(pattern) = include_pattern(line) {
                 let expanded = crate::pathing::expand_tilde(Path::new(pattern));
                 if expanded.is_absolute() {
-                    explicit_includes.push(crate::pathing::normalize_path(&expanded));
+                    let norm = crate::pathing::normalize_path(&expanded);
+                    if norm.file_name().and_then(|n| n.to_str()) == Some(SLOPIGNORE_FILE_NAME) {
+                        has_explicit_slopignore_include = true;
+                    }
+                    explicit_includes.push(norm);
                 } else {
                     let clean_pattern = pattern.strip_prefix("./").unwrap_or(pattern);
+                    if clean_pattern.trim().ends_with(SLOPIGNORE_FILE_NAME) {
+                        has_explicit_slopignore_include = true;
+                    }
                     if let Err(error) = include_builder.add_line(Some(source.clone()), clean_pattern) {
                         eprintln!(
                             "warning: could not compile slopinclude in {}: {error}; continuing without it",
@@ -126,6 +136,7 @@ impl SlopIgnore {
             matcher: Some(matcher),
             include_matcher,
             explicit_includes,
+            has_explicit_slopignore_include,
             source: Some(source),
         }
     }
@@ -165,6 +176,14 @@ impl SlopIgnore {
         matcher
             .matched_path_or_any_parents(relative, is_dir)
             .is_ignore()
+    }
+
+    /// Whether `path` (a `.slopignore` file) was explicitly targeted by a `slopinclude` directive.
+    pub fn is_explicit_slopignore_included(&self, path: &Path) -> bool {
+        if self.explicit_includes.contains(&path.to_path_buf()) {
+            return true;
+        }
+        self.has_explicit_slopignore_include
     }
 
     /// Directory that local include rules are evaluated beneath.
