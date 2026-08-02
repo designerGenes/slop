@@ -246,6 +246,39 @@ fn run_report_shows_external_slopinclude_files() {
         .stderr(contains("file6.md"));
 }
 
+#[test]
+fn subfolder_invocation_does_not_inherit_parent_slopignore() {
+    let temp = fixture();
+    let home = temp.path().join("home");
+    let root = temp.path().join("project_root");
+    let subfolder = root.join("dir1/dir2");
+    let output_dir = temp.path().join("out");
+
+    fs::write(root.join(".slopignore"), "*.txt\nslopinclude dir1/dir2/dir3/file3.md\n")
+        .expect("root slopignore should be written");
+
+    // Invoking `slop .` inside `dir1/dir2` (which lacks a .slopignore) must NOT
+    // inherit `root/.slopignore`. Thus, file2.txt should be included and not pruned.
+    cargo_bin(&home)
+        .current_dir(&subfolder)
+        .args(["-r", "-o"])
+        .arg(&output_dir)
+        .arg(".")
+        .assert()
+        .success();
+
+    let slop = read_only_slop(&output_dir);
+    assert!(
+        slop.contains("two"),
+        "subfolder invocation should not prune file2.txt via parent .slopignore"
+    );
+    assert!(
+        !slop.contains("three"),
+        "subfolder invocation should not execute parent .slopignore slopinclude directives"
+    );
+}
+
+
 fn read_only_slop(output_dir: &Path) -> String {
     let entry = fs::read_dir(output_dir)
         .expect("output dir should exist")

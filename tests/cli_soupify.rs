@@ -606,3 +606,45 @@ fn respect_gitignore_config_default_enables_pruning_without_flag() {
     assert!(slop.contains("one"));
     assert!(!slop.contains("two"));
 }
+
+#[test]
+fn overwrites_existing_slop_file_in_directory_walk() {
+    let temp = tempdir().expect("tempdir should exist");
+    let dir = temp.path().join("my_project");
+    fs::create_dir_all(&dir).expect("dir created");
+    fs::write(dir.join("file1.txt"), "first content").expect("file1 written");
+    fs::write(dir.join("file2.txt"), "second content").expect("file2 written");
+
+    // First slop run targeting dir, outputting into dir
+    cargo_bin()
+        .arg("-r")
+        .arg(&dir)
+        .arg("-o")
+        .arg(&dir)
+        .assert()
+        .success();
+
+    let slop_file = dir.join("file1_file2.md");
+    assert!(slop_file.exists());
+    let slop1 = fs::read_to_string(&slop_file).expect("slop1 read");
+    assert!(slop1.contains("first content"));
+
+    // Modify source file
+    fs::write(dir.join("file1.txt"), "updated first content").expect("file1 updated");
+
+    // Second slop run targeting dir, outputting into dir again
+    cargo_bin()
+        .arg("-r")
+        .arg(&dir)
+        .arg("-o")
+        .arg(&dir)
+        .assert()
+        .success();
+
+    // The existing slop_file (file1_file2.md) should be overwritten with updated content
+    // and no duplicate slop file (e.g. file1_file2_file1_file2.md) should be created.
+    assert!(slop_file.exists());
+    let slop2 = fs::read_to_string(&slop_file).expect("slop2 read");
+    assert!(slop2.contains("updated first content"));
+    assert!(!dir.join("file1_file2_file1_file2.md").exists());
+}

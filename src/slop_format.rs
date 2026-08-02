@@ -365,6 +365,25 @@ fn meta_header_regex() -> &'static Regex {
     })
 }
 
+pub fn is_slop_file(path: &std::path::Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    contents
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map_or(false, |first_line| {
+            let line = first_line.trim_start_matches('\u{feff}');
+            line.starts_with("#SLOP ")
+                || line.starts_with("#SLOP_META ")
+                || line.starts_with("#SLOP_AUTO_UNslop")
+                || line == "#SLOP"
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;

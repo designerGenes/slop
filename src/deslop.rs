@@ -423,17 +423,7 @@ fn read_slop_document(path: &Path) -> Result<SoupDocument, SlopError> {
 }
 
 fn looks_like_slop_file(path: &Path) -> bool {
-    if !path.is_file() {
-        return false;
-    }
-    let Ok(contents) = fs::read_to_string(path) else {
-        return false;
-    };
-    contents.lines().next().map_or(false, |first_line| {
-        first_line.starts_with("#SLOP ")
-            || first_line.starts_with("#SLOP_META ")
-            || first_line.starts_with("#SLOP_AUTO_UNslop")
-    })
+    crate::slop_format::is_slop_file(path)
 }
 
 fn match_slop_file(

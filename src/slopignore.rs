@@ -8,11 +8,9 @@
 //! leaking into the other.
 //!
 //! Discovery is intentionally narrow and predictable: slop looks for a single
-//! `.slopignore`, starting at the walked directory and climbing ancestors only
-//! while still inside the containing git repository (stopping at, and
-//! including, the repo root). Outside a git repo, the walked directory and the
-//! invocation directory are consulted — slop will never silently pick up a
-//! stray `.slopignore` from `$HOME` or `/`.
+//! `.slopignore` in the target walked directory (or the directory of a target file).
+//! Ancestor directories are deliberately not searched, so invoking slop within a
+//! subfolder will not inherit a parent folder's `.slopignore`.
 //!
 //! `.slopignore` applies to *directory walks* only. A file named explicitly on
 //! the command line is always slopped; if you asked for it by name, you meant
@@ -80,7 +78,8 @@ impl SlopIgnore {
                 if expanded.is_absolute() {
                     explicit_includes.push(crate::pathing::normalize_path(&expanded));
                 } else {
-                    if let Err(error) = include_builder.add_line(Some(source.clone()), pattern) {
+                    let clean_pattern = pattern.strip_prefix("./").unwrap_or(pattern);
+                    if let Err(error) = include_builder.add_line(Some(source.clone()), clean_pattern) {
                         eprintln!(
                             "warning: could not compile slopinclude in {}: {error}; continuing without it",
                             source.display()
@@ -193,40 +192,17 @@ fn include_pattern(line: &str) -> Option<&str> {
     (!pattern.trim().is_empty()).then_some(pattern.trim_start())
 }
 
-/// Walk from `input` up to the containing git root looking for a
-/// `.slopignore`. Returns the nearest one, or `None`.
+/// Locate the `.slopignore` governing `input`.
+/// Only checks the directory of `input` directly; ancestor directories
+/// are not searched so that subfolder invocations do not inherit parent `.slopignore` files.
 fn find_slopignore(input: &Path) -> Option<PathBuf> {
     let start = start_dir(input)?;
-    let git_root = crate::pathing::containing_git_root(&start);
-
-    let mut current: Option<&Path> = Some(start.as_path());
-    while let Some(dir) = current {
-        let candidate = dir.join(SLOPIGNORE_FILE_NAME);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-
-        match git_root.as_deref() {
-            // Reached the repo root without a hit: stop, do not escape the repo.
-            Some(root) if is_same_dir(dir, root) => return None,
-            Some(_) => current = dir.parent(),
-            // Not inside a repo: a direct child input should still inherit the
-            // invocation directory's .slopignore, but never an arbitrary
-            // ancestor such as $HOME.
-            None => {
-                let cwd = std::env::current_dir().ok();
-                if let Some(cwd) = cwd.filter(|cwd| is_within_dir(&start, cwd)) {
-                    let candidate = cwd.join(SLOPIGNORE_FILE_NAME);
-                    if candidate.is_file() {
-                        return Some(candidate);
-                    }
-                }
-                return None;
-            }
-        }
+    let candidate = start.join(SLOPIGNORE_FILE_NAME);
+    if candidate.is_file() {
+        Some(candidate)
+    } else {
+        None
     }
-
-    None
 }
 
 /// Deliberately *not* canonicalized: the returned path becomes the matcher's
@@ -238,28 +214,6 @@ fn start_dir(input: &Path) -> Option<PathBuf> {
         Some(input.to_path_buf())
     } else {
         Some(input.parent()?.to_path_buf())
-    }
-}
-
-/// `containing_git_root` canonicalizes; the climb does not. Compare both ways
-/// so the bound still holds on platforms where temp dirs are symlinked.
-fn is_same_dir(left: &Path, right: &Path) -> bool {
-    if left == right {
-        return true;
-    }
-    match (left.canonicalize(), right.canonicalize()) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
-    }
-}
-
-fn is_within_dir(path: &Path, directory: &Path) -> bool {
-    if path.starts_with(directory) {
-        return true;
-    }
-    match (path.canonicalize(), directory.canonicalize()) {
-        (Ok(path), Ok(directory)) => path.starts_with(directory),
-        _ => false,
     }
 }
 
@@ -332,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn climbs_to_repo_root_when_inside_a_git_repo() {
+    fn does_not_climb_to_parent_repo_root() {
         let temp = tempdir().expect("tempdir");
         let root = temp.path();
         fs::create_dir_all(root.join(".git")).expect("git marker should be created");
@@ -342,28 +296,14 @@ mod tests {
 
         let ignore = SlopIgnore::discover(&root.join("src/nested"));
         assert!(
-            ignore.is_active(),
-            "a repo-root .slopignore should govern nested walks"
+            !ignore.is_active(),
+            "a parent repo-root .slopignore should not govern nested subfolder walks"
         );
-        assert!(ignore.is_ignored(&root.join("src/nested/debug.log"), false));
+        assert!(!ignore.is_ignored(&root.join("src/nested/debug.log"), false));
     }
 
     #[test]
-    fn does_not_climb_outside_a_git_repo() {
-        let temp = tempdir().expect("tempdir");
-        let root = temp.path();
-        fs::create_dir_all(root.join("plain/nested")).expect("dirs should be created");
-        fs::write(root.join(SLOPIGNORE_FILE_NAME), "*.log\n")
-            .expect("slopignore should be written");
-
-        // `plain/nested` is not in a git repo, so the ancestor .slopignore is
-        // deliberately not consulted.
-        let ignore = SlopIgnore::discover(&root.join("plain/nested"));
-        assert!(!ignore.is_active());
-    }
-
-    #[test]
-    fn nearest_slopignore_wins() {
+    fn subfolder_slopignore_governs_only_subfolder() {
         let temp = tempdir().expect("tempdir");
         let root = temp.path();
         fs::create_dir_all(root.join(".git")).expect("git marker should be created");
@@ -376,7 +316,7 @@ mod tests {
         assert!(ignore.is_ignored(&root.join("src/scratch.tmp"), false));
         assert!(
             !ignore.is_ignored(&root.join("src/debug.log"), false),
-            "the nearest .slopignore replaces ancestors rather than layering"
+            "subfolder .slopignore governs subfolder walk, root .slopignore is not consulted"
         );
     }
 }

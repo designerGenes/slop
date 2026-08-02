@@ -670,6 +670,9 @@ fn collect_dir(
                     continue;
                 }
             }
+            if crate::slop_format::is_slop_file(entry_path) {
+                continue;
+            }
             if !is_plaintext(entry_path) {
                 eprintln!("warning: skipping non-text file: {}", entry_path.display());
                 continue;
@@ -794,6 +797,9 @@ fn collect_dir_respecting_gitignore(
                 if SKIP_EXTS.contains(&ext) {
                     continue;
                 }
+            }
+            if crate::slop_format::is_slop_file(entry_path) {
+                continue;
             }
             if !is_plaintext(entry_path) {
                 eprintln!("warning: skipping non-text file: {}", entry_path.display());
