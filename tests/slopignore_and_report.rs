@@ -247,18 +247,22 @@ fn run_report_shows_external_slopinclude_files() {
 }
 
 #[test]
-fn subfolder_invocation_does_not_inherit_parent_slopignore() {
+fn subfolder_invocation_uses_own_slopignore_not_parents() {
     let temp = fixture();
     let home = temp.path().join("home");
     let root = temp.path().join("project_root");
     let subfolder = root.join("dir1/dir2");
     let output_dir = temp.path().join("out");
 
-    fs::write(root.join(".slopignore"), "*.txt\nslopinclude dir1/dir2/dir3/file3.md\n")
+    // The parent's directives must be invisible from the subfolder: its ignore
+    // rule would prune a file inside the calling folder, and its slopinclude
+    // targets a file OUTSIDE it.
+    fs::write(root.join(".slopignore"), "*.txt\nslopinclude dir1/file1.txt\n")
         .expect("root slopignore should be written");
+    // The subfolder has a .slopignore of its own: it alone governs the walk.
+    fs::write(subfolder.join(".slopignore"), "*.js\n")
+        .expect("subfolder slopignore should be written");
 
-    // Invoking `slop .` inside `dir1/dir2` (which lacks a .slopignore) must NOT
-    // inherit `root/.slopignore`. Thus, file2.txt should be included and not pruned.
     cargo_bin(&home)
         .current_dir(&subfolder)
         .args(["-r", "-o"])
@@ -270,11 +274,19 @@ fn subfolder_invocation_does_not_inherit_parent_slopignore() {
     let slop = read_only_slop(&output_dir);
     assert!(
         slop.contains("two"),
-        "subfolder invocation should not prune file2.txt via parent .slopignore"
+        "file2.txt must not be pruned by the parent .slopignore"
     );
     assert!(
-        !slop.contains("three"),
-        "subfolder invocation should not execute parent .slopignore slopinclude directives"
+        slop.contains("three"),
+        "file3.md lives beneath the calling folder and is slopped"
+    );
+    assert!(
+        !slop.contains("five"),
+        "the subfolder's own .slopignore prunes file5.js"
+    );
+    assert!(
+        !slop.contains("one"),
+        "the parent .slopignore's slopinclude must not execute from a subfolder invocation"
     );
 }
 

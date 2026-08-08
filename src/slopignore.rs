@@ -10,12 +10,15 @@
 //! Discovery is intentionally narrow and predictable: slop looks for a single
 //! `.slopignore` in the target walked directory (or the directory of a target file).
 //! Ancestor directories are deliberately not searched, so invoking slop within a
-//! subfolder will not inherit a parent folder's `.slopignore`.
+//! subfolder will not inherit a parent folder's `.slopignore`. Slop only ever
+//! works in one direction — down from the calling folder.
 //!
 //! `.slopignore` applies to *directory walks* only. A file named explicitly on
 //! the command line is always slopped; if you asked for it by name, you meant
-//! it. Its `slopinclude` directives still apply when that file is beneath the
-//! directory where the command was invoked.
+//! it. When such a file lives beneath the invocation directory and its own
+//! directory has no `.slopignore`, the calling folder's `.slopignore` supplies
+//! its `slopinclude` directives — which may themselves point at external
+//! directories (e.g. `slopinclude $HOME/shared/`).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -214,14 +217,34 @@ fn include_pattern(line: &str) -> Option<&str> {
 /// Locate the `.slopignore` governing `input`.
 /// Only checks the directory of `input` directly; ancestor directories
 /// are not searched so that subfolder invocations do not inherit parent `.slopignore` files.
+///
+/// One exception, for explicit *file* inputs only: a file named on the command
+/// line is always slopped regardless of ignore rules, so the only directives
+/// that matter for it are `slopinclude`s. When the file lives beneath the
+/// invocation directory and its own directory has no `.slopignore`, the calling
+/// folder's `.slopignore` supplies them. Directory walks never get this
+/// fallback — they reflect the walked folder and nothing above it.
 fn find_slopignore(input: &Path) -> Option<PathBuf> {
     let start = start_dir(input)?;
     let candidate = start.join(SLOPIGNORE_FILE_NAME);
     if candidate.is_file() {
-        Some(candidate)
-    } else {
-        None
+        return Some(candidate);
     }
+
+    if input.is_file() {
+        let cwd = std::env::current_dir().ok()?;
+        // Canonicalize for the comparison only: on macOS the walker-facing
+        // paths stay in their original (/var/...) spelling, while `getcwd`
+        // returns the physical (/private/var/...) path.
+        let start = start.canonicalize().unwrap_or_else(|_| start.clone());
+        if start != cwd && start.starts_with(&cwd) {
+            let candidate = cwd.join(SLOPIGNORE_FILE_NAME);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 /// Deliberately *not* canonicalized: the returned path becomes the matcher's
