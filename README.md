@@ -96,6 +96,16 @@ slopinclude $HOME/shared/api-contract.md
 
 Files explicitly listed on the command line and matched by one or more include rules are bundled only once.
 
+Because includes supersede ignore rules, a leading `*` turns `.slopignore` into an allowlist — ignore everything, then name the exceptions:
+
+```text
+*
+
++ someFile
++ someDirectory/
++ someOtherDirectory/*.md
+```
+
 ---
 
 ### 5. Add a whole-repo code graph

@@ -365,3 +365,73 @@ fn read_only_slop(output_dir: &Path) -> String {
         .expect("dir entry should be readable");
     fs::read_to_string(entry.path()).expect("slop file should be readable")
 }
+
+fn star_supersede_fixture() -> tempfile::TempDir {
+    let temp = tempdir().expect("tempdir should exist");
+    let root = temp.path().join("project_root");
+    fs::create_dir_all(root.join("src")).expect("dirs should be created");
+    fs::create_dir_all(root.join("docs")).expect("dirs should be created");
+    fs::write(root.join("important.txt"), "keep").expect("file should be written");
+    fs::write(root.join("junk.log"), "noise").expect("file should be written");
+    fs::write(root.join("src/main.rs"), "main").expect("file should be written");
+    fs::write(root.join("src/util.rs"), "util").expect("file should be written");
+    fs::write(root.join("docs/readme.md"), "readme").expect("file should be written");
+    fs::write(root.join("docs/notes.txt"), "notes").expect("file should be written");
+    temp
+}
+
+#[test]
+fn star_supersede_with_slopinclude_slopping() {
+    let temp = star_supersede_fixture();
+    let home = temp.path().join("home");
+    let root = temp.path().join("project_root");
+    let output_dir = temp.path().join("out");
+
+    fs::write(
+        root.join(".slopignore"),
+        "*\n+ important.txt\n+ src/\n+ docs/*.md\n",
+    )
+    .expect("slopignore should be written");
+
+    cargo_bin(&home)
+        .current_dir(&root)
+        .args(["-r", "-o"])
+        .arg(&output_dir)
+        .arg(".")
+        .assert()
+        .success();
+
+    let slop = read_only_slop(&output_dir);
+    assert!(slop.contains("keep"), "+ important.txt should supersede *");
+    assert!(slop.contains("main"), "+ src/ should include nested files");
+    assert!(slop.contains("util"), "+ src/ should include nested files");
+    assert!(slop.contains("readme"), "+ docs/*.md should supersede *");
+    assert!(!slop.contains("noise"), "* should ignore junk.log");
+    assert!(!slop.contains("notes"), "* should ignore docs/notes.txt (not .md)");
+}
+
+#[test]
+fn star_supersede_verbose_shows_ignored() {
+    let temp = star_supersede_fixture();
+    let home = temp.path().join("home");
+    let root = temp.path().join("project_root");
+
+    fs::write(root.join(".slopignore"), "*\n+ important.txt\n+ src/\n")
+        .expect("slopignore should be written");
+
+    cargo_bin(&home)
+        .current_dir(&root)
+        .args(["-r", "-o"])
+        .arg(temp.path().join("out"))
+        .args(["--verbose", "."])
+        .assert()
+        .success()
+        // Rescued paths are shown as included, not tagged [IGNORED].
+        .stderr(contains("important.txt\n"))
+        .stderr(contains("important.txt [IGNORED]").not())
+        .stderr(contains("src [IGNORED]").not())
+        .stderr(contains("main.rs"))
+        // Genuinely ignored paths are still reported.
+        .stderr(contains("junk.log [IGNORED]"))
+        .stderr(contains("docs [IGNORED]"));
+}

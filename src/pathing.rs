@@ -257,6 +257,17 @@ pub fn collect_source_files_reporting(
     ignored.sort_by(|left, right| compare_paths_for_output(&left.path, &right.path));
     ignored.dedup_by(|left, right| left.path == right.path);
 
+    // slopinclude directives supersede slopignore rules: a rescued file, or a
+    // pruned directory whose contents were rescued, is not "ignored" and must
+    // not be reported as such (verbose tree tag, quiet-mode skip count).
+    if !forced_files.is_empty() {
+        ignored.retain(|entry| {
+            !forced_files
+                .iter()
+                .any(|forced| forced == &entry.path || forced.starts_with(&entry.path))
+        });
+    }
+
     Ok(WalkReport {
         files,
         forced_files,
@@ -1405,5 +1416,84 @@ mod tests {
             .expect("collection should succeed");
         assert_eq!(report.files.len(), 1);
         assert!(report.ignored.is_empty());
+    }
+
+    #[test]
+    fn star_supersede_with_slopinclude() {
+        let temp = tempdir().expect("temp dir should be created");
+        let root = temp.path().to_path_buf();
+
+        fs::write(
+            root.join(".slopignore"),
+            "*\n+ keep.txt\n+ src/\n+ docs/*.md\n",
+        )
+        .expect("slopignore should be written");
+
+        fs::write(root.join("keep.txt"), "keep").expect("file written");
+        fs::write(root.join("drop.log"), "drop").expect("file written");
+        fs::create_dir_all(root.join("src")).expect("dirs created");
+        fs::write(root.join("src/main.rs"), "main").expect("file written");
+        fs::write(root.join("src/util.rs"), "util").expect("file written");
+        fs::create_dir_all(root.join("docs")).expect("dirs created");
+        fs::write(root.join("docs/readme.md"), "readme").expect("file written");
+        fs::write(root.join("docs/notes.txt"), "notes").expect("file written");
+        fs::create_dir_all(root.join("vendor")).expect("dirs created");
+        fs::write(root.join("vendor/lib.js"), "lib").expect("file written");
+
+        let report =
+            collect_source_files_reporting(&[root.clone()], Some(usize::MAX), &[], false)
+                .expect("collection should succeed");
+
+        assert!(
+            report.files.contains(&root.join("keep.txt")),
+            "+ keep.txt should supersede *"
+        );
+        assert!(
+            report.files.contains(&root.join("src/main.rs")),
+            "+ src/ should supersede * and include nested files"
+        );
+        assert!(
+            report.files.contains(&root.join("src/util.rs")),
+            "+ src/ should supersede * and include nested files"
+        );
+        assert!(
+            report.files.contains(&root.join("docs/readme.md")),
+            "+ docs/*.md should supersede *"
+        );
+
+        assert!(
+            !report.files.contains(&root.join("drop.log")),
+            "* should ignore non-included root files"
+        );
+        assert!(
+            !report.files.contains(&root.join("docs/notes.txt")),
+            "+ docs/*.md should not include non-.md files in docs/"
+        );
+        assert!(
+            !report.files.contains(&root.join("vendor/lib.js")),
+            "* should ignore non-included nested files"
+        );
+
+        // Superseded paths must not linger in the ignored report.
+        assert!(
+            !report.ignored.iter().any(|e| e.path == root.join("keep.txt")),
+            "a rescued file is not ignored"
+        );
+        assert!(
+            !report.ignored.iter().any(|e| e.path == root.join("src")),
+            "a directory whose contents were rescued is not ignored"
+        );
+        assert!(
+            !report.ignored.iter().any(|e| e.path == root.join("docs")),
+            "a directory whose contents were rescued is not ignored"
+        );
+        assert!(
+            report.ignored.iter().any(|e| e.path == root.join("drop.log")),
+            "a genuinely ignored file is still reported"
+        );
+        assert!(
+            report.ignored.iter().any(|e| e.path == root.join("vendor")),
+            "a fully ignored directory is still reported"
+        );
     }
 }
