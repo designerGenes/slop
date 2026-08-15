@@ -233,9 +233,37 @@ fn config_skips_slopignore_for_an_explicit_file_statement() {
     )
     .expect("config should be written");
     fs::write(root.join("extra.txt"), "should not be added").expect("file should be written");
-    fs::write(root.join(".slopignore"), "slopinclude extra.txt\n")
+    fs::write(root.join(".slopignore"), "*\nslopinclude extra.txt\n")
         .expect("slopignore should be written");
     let explicit = root.join("dir1/file1.txt");
+    let second_explicit = root.join("dir1/dir2/dir3/file3.md");
+
+    cargo_bin(&home)
+        .current_dir(&root)
+        .args(["-o"])
+        .arg(&output_dir)
+        .arg(&explicit)
+        .arg(&second_explicit)
+        .assert()
+        .success();
+
+    let slop = read_only_slop(&output_dir);
+    assert!(slop.contains("one"));
+    assert!(slop.contains("three"));
+    assert!(
+        !slop.contains("should not be added"),
+        "full explicit-file statements must not execute slopinclude directives"
+    );
+}
+
+#[test]
+fn explicit_file_inputs_override_slopignore_when_config_is_false() {
+    let temp = fixture();
+    let home = temp.path().join("home");
+    let root = temp.path().join("project_root");
+    let output_dir = temp.path().join("out");
+    fs::write(root.join(".slopignore"), "*\n").expect("slopignore should be written");
+    let explicit = root.join("dir1/dir2/dir3/file3.md");
 
     cargo_bin(&home)
         .current_dir(&root)
@@ -246,10 +274,9 @@ fn config_skips_slopignore_for_an_explicit_file_statement() {
         .success();
 
     let slop = read_only_slop(&output_dir);
-    assert!(slop.contains("one"));
     assert!(
-        !slop.contains("should not be added"),
-        "full explicit-file statements must not execute slopinclude directives"
+        slop.contains("three"),
+        "an explicitly named file must bypass .slopignore even when the config setting is false"
     );
 }
 
@@ -259,7 +286,15 @@ fn ignore_slopignore_flag_bypasses_rules_for_directory_walks() {
     let home = temp.path().join("home");
     let root = temp.path().join("project_root");
     let output_dir = temp.path().join("out");
-    fs::write(root.join(".slopignore"), "*.md\n").expect("slopignore should be written");
+    let external = home.join("external/file6.md");
+    fs::create_dir_all(external.parent().expect("external parent"))
+        .expect("external directory should be created");
+    fs::write(&external, "must not be added").expect("external file should be written");
+    fs::write(
+        root.join(".slopignore"),
+        "*\nslopinclude $HOME/external/\n",
+    )
+    .expect("slopignore should be written");
 
     cargo_bin(&home)
         .current_dir(&root)
@@ -273,6 +308,10 @@ fn ignore_slopignore_flag_bypasses_rules_for_directory_walks() {
     assert!(
         slop.contains("three"),
         "--ignore-slopignore must bypass ignore rules even for directory walks"
+    );
+    assert!(
+        !slop.contains("must not be added"),
+        "--ignore-slopignore must not execute slopinclude directives"
     );
 }
 
