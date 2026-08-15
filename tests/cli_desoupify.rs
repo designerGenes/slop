@@ -104,6 +104,29 @@ fn deslop_overwrites_existing_files() {
 }
 
 #[test]
+fn deslop_reads_a_slop_document_from_stdin_without_a_selector() {
+    let temp = tempdir().expect("tempdir should exist");
+    let file = temp.path().join("file.txt");
+    fs::write(&file, "old\n").expect("source should be written");
+    let path = serde_json::to_string(&file.to_string_lossy().to_string())
+        .expect("path should serialize");
+    let slop = format!(
+        "#SLOP {path} #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 1\nnew\n"
+    );
+
+    cargo_bin()
+        .args(["-d"])
+        .write_stdin(slop)
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read_to_string(&file).expect("file should be restored"),
+        "new\n"
+    );
+}
+
+#[test]
 fn deslop_works_when_selector_directory_is_missing() {
     let temp = tempdir().expect("tempdir should exist");
     let folder = temp.path().join("folder1");

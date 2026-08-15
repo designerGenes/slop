@@ -1,5 +1,6 @@
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
@@ -197,12 +198,15 @@ pub fn run_deslop(args: &CliArgs, config: &Config) -> Result<Vec<PathBuf>, SlopE
         .map(|selector| resolve_absolute(selector, &cwd))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let (_slop_file, document) = match resolve_direct_slop_document(&resolved_inputs)? {
-        Some((slop_file, document)) => (slop_file, document),
-        None => {
-            let slop_file = find_matching_slop_file(&resolved_inputs, &slop_dir)?;
-            let document = read_slop_document(&slop_file)?;
-            (slop_file, document)
+    let document = if resolved_inputs.is_empty() {
+        read_slop_document_from_stdin()?
+    } else {
+        match resolve_direct_slop_document(&resolved_inputs)? {
+            Some((_slop_file, document)) => document,
+            None => {
+                let slop_file = find_matching_slop_file(&resolved_inputs, &slop_dir)?;
+                read_slop_document(&slop_file)?
+            }
         }
     };
 
@@ -419,6 +423,17 @@ fn read_slop_document(path: &Path) -> Result<SoupDocument, SlopError> {
         path: path.to_path_buf(),
         source: error,
     })?;
+    parse_document(&markdown)
+}
+
+fn read_slop_document_from_stdin() -> Result<SoupDocument, SlopError> {
+    let mut markdown = String::new();
+    io::stdin()
+        .read_to_string(&mut markdown)
+        .map_err(|error| SlopError::FileReadFailure {
+            path: PathBuf::from("<stdin>"),
+            source: error,
+        })?;
     parse_document(&markdown)
 }
 

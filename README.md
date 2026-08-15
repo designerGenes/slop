@@ -176,6 +176,21 @@ Or let slop find the right slop automatically by passing the files the AI edited
 slop -d src/auth.py src/models.py
 ```
 
+You can also paste a complete slop document directly into the terminal. Run `slop -d` with no selector, paste the blocks, then signal end-of-input with `Ctrl-D`:
+
+```text
+slop -d
+#SLOP "/absolute/path/to/file.swift" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 1
+updated content
+<Ctrl-D>
+```
+
+Piped input works the same way:
+
+```bash
+cat returned.slop.md | slop -d
+```
+
 ---
 
 ### 9. Preview an AI's edits before applying them

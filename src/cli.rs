@@ -69,7 +69,7 @@ struct RawCliArgs {
     /// Long-form only: `-v`/`-V` are already claimed by version reporting.
     #[arg(long = "verbose")]
     verbose: bool,
-    #[arg(value_name = "INPUT", required = true)]
+    #[arg(value_name = "INPUT")]
     inputs: Vec<PathBuf>,
 }
 
@@ -93,9 +93,10 @@ where
             }
         })?;
 
-    if parsed.inputs.is_empty() {
+    if parsed.inputs.is_empty() && !parsed.deslop {
         return Err(SlopError::InvalidCliUsage(
-            "at least one input path is required".to_string(),
+            "at least one input path is required unless -d/--deslop is reading a slop document from stdin"
+                .to_string(),
         ));
     }
 
@@ -146,6 +147,13 @@ mod tests {
         let result = parse_cli_args_from(["slop"]);
         let error = result.expect_err("expected missing input failure");
         assert!(error.to_string().contains("required"));
+    }
+
+    #[test]
+    fn allows_deslop_without_inputs_for_stdin() {
+        let result = parse_cli_args_from(["slop", "-d"]).expect("stdin deslop should parse");
+        assert!(result.deslop);
+        assert!(result.inputs.is_empty());
     }
 
     #[test]
