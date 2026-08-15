@@ -96,6 +96,20 @@ slopinclude $HOME/shared/api-contract.md
 
 Files explicitly listed on the command line and matched by one or more include rules are bundled only once.
 
+When you provide only explicit file paths, you can make that list authoritative and skip the repository's `.slopignore` file, including its `slopinclude` directives:
+
+```bash
+slop --ignore-slopignore src/auth.py src/models.py
+```
+
+Enable this automatically for all-file statements in `~/.config/slop/config.yaml`:
+
+```yaml
+skip_slopignore_for_full_statement: true
+```
+
+The setting applies only when every positional input is an explicit file. Use `--ignore-slopignore` to bypass `.slopignore` for any invocation, including directory walks.
+
 Because includes supersede ignore rules, a leading `*` turns `.slopignore` into an allowlist — ignore everything, then name the exceptions:
 
 ```text

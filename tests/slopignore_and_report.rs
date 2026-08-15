@@ -220,6 +220,63 @@ fn slopinclude_forces_local_and_home_files_without_duplicates() {
 }
 
 #[test]
+fn config_skips_slopignore_for_an_explicit_file_statement() {
+    let temp = fixture();
+    let home = temp.path().join("home");
+    let root = temp.path().join("project_root");
+    let output_dir = temp.path().join("out");
+    let config_dir = home.join(".config/slop");
+    fs::create_dir_all(&config_dir).expect("config dir should be created");
+    fs::write(
+        config_dir.join("config.yaml"),
+        "skip_slopignore_for_full_statement: true\n",
+    )
+    .expect("config should be written");
+    fs::write(root.join("extra.txt"), "should not be added").expect("file should be written");
+    fs::write(root.join(".slopignore"), "slopinclude extra.txt\n")
+        .expect("slopignore should be written");
+    let explicit = root.join("dir1/file1.txt");
+
+    cargo_bin(&home)
+        .current_dir(&root)
+        .args(["-o"])
+        .arg(&output_dir)
+        .arg(&explicit)
+        .assert()
+        .success();
+
+    let slop = read_only_slop(&output_dir);
+    assert!(slop.contains("one"));
+    assert!(
+        !slop.contains("should not be added"),
+        "full explicit-file statements must not execute slopinclude directives"
+    );
+}
+
+#[test]
+fn ignore_slopignore_flag_bypasses_rules_for_directory_walks() {
+    let temp = fixture();
+    let home = temp.path().join("home");
+    let root = temp.path().join("project_root");
+    let output_dir = temp.path().join("out");
+    fs::write(root.join(".slopignore"), "*.md\n").expect("slopignore should be written");
+
+    cargo_bin(&home)
+        .current_dir(&root)
+        .args(["-r", "--ignore-slopignore", "-o"])
+        .arg(&output_dir)
+        .arg(".")
+        .assert()
+        .success();
+
+    let slop = read_only_slop(&output_dir);
+    assert!(
+        slop.contains("three"),
+        "--ignore-slopignore must bypass ignore rules even for directory walks"
+    );
+}
+
+#[test]
 fn run_report_shows_external_slopinclude_files() {
     let temp = fixture();
     let home = temp.path().join("home");

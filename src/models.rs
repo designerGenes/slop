@@ -9,6 +9,7 @@ pub struct CliArgs {
     pub inputs: Vec<PathBuf>,
     pub exclude: Vec<String>,
     pub respect_gitignore: bool,
+    pub ignore_slopignore: bool,
     pub include_graph: bool,
     pub slop_to: Option<PathBuf>,
     pub graph_format: Option<String>,

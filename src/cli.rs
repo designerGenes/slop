@@ -26,6 +26,8 @@ struct RawCliArgs {
     exclude: Vec<String>,
     #[arg(long = "respect-gitignore")]
     respect_gitignore: bool,
+    #[arg(long = "ignore-slopignore")]
+    ignore_slopignore: bool,
     #[arg(short = 'g', long = "include-graph")]
     include_graph: bool,
     #[arg(long = "slop-to")]
@@ -111,6 +113,7 @@ where
         inputs: parsed.inputs,
         exclude: parsed.exclude,
         respect_gitignore: parsed.respect_gitignore,
+        ignore_slopignore: parsed.ignore_slopignore,
         include_graph: parsed.include_graph,
         slop_to: parsed.slop_to,
         graph_format: parsed.graph_format,
@@ -169,6 +172,19 @@ mod tests {
     fn respect_gitignore_defaults_to_false() {
         let result = parse_cli_args_from(["slop", "file.txt"]).expect("should parse");
         assert!(!result.respect_gitignore);
+    }
+
+    #[test]
+    fn parses_ignore_slopignore_flag() {
+        let result =
+            parse_cli_args_from(["slop", "--ignore-slopignore", "file.txt"]).expect("should parse");
+        assert!(result.ignore_slopignore);
+    }
+
+    #[test]
+    fn ignore_slopignore_defaults_to_false() {
+        let result = parse_cli_args_from(["slop", "file.txt"]).expect("should parse");
+        assert!(!result.ignore_slopignore);
     }
 
     #[test]

@@ -216,6 +216,25 @@ pub fn collect_source_files_reporting(
     exclude: &[String],
     respect_gitignore: bool,
 ) -> Result<WalkReport, SlopError> {
+    collect_source_files_reporting_with_slopignore(
+        inputs,
+        max_depth,
+        exclude,
+        respect_gitignore,
+        false,
+    )
+}
+
+/// Collect files while optionally bypassing `.slopignore` discovery and all
+/// of its include directives. This keeps an explicit all-file invocation an
+/// exact request rather than adding files from repository configuration.
+pub fn collect_source_files_reporting_with_slopignore(
+    inputs: &[PathBuf],
+    max_depth: Option<usize>,
+    exclude: &[String],
+    respect_gitignore: bool,
+    skip_slopignore: bool,
+) -> Result<WalkReport, SlopError> {
     let mut seen = BTreeSet::new();
     let mut files = Vec::new();
     let mut forced_seen = BTreeSet::new();
@@ -227,7 +246,11 @@ pub fn collect_source_files_reporting(
         let depth = max_depth.unwrap_or(0);
         // Discovered per input: two inputs can sit in different repos, each
         // with its own .slopignore.
-        let slopignore = Arc::new(SlopIgnore::discover(input));
+        let slopignore = if skip_slopignore {
+            Arc::new(SlopIgnore::empty())
+        } else {
+            Arc::new(SlopIgnore::discover(input))
+        };
         collect_path(
             input,
             &mut seen,
@@ -1300,8 +1323,9 @@ mod tests {
         fs::write(root.join("vendor/a.rs"), "skip").expect("file should be written");
         fs::write(root.join("vendor/deep/b.rs"), "skip").expect("file should be written");
 
-        let report = collect_source_files_reporting(&[root.clone()], Some(usize::MAX), &[], false)
-            .expect("collection should succeed");
+        let report =
+            collect_source_files_reporting(&[root.clone()], Some(usize::MAX), &[], false)
+                .expect("collection should succeed");
 
         assert!(report.files.contains(&root.join("keep.rs")));
         assert!(
@@ -1440,9 +1464,8 @@ mod tests {
         fs::create_dir_all(root.join("vendor")).expect("dirs created");
         fs::write(root.join("vendor/lib.js"), "lib").expect("file written");
 
-        let report =
-            collect_source_files_reporting(&[root.clone()], Some(usize::MAX), &[], false)
-                .expect("collection should succeed");
+        let report = collect_source_files_reporting(&[root.clone()], Some(usize::MAX), &[], false)
+            .expect("collection should succeed");
 
         assert!(
             report.files.contains(&root.join("keep.txt")),

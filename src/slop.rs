@@ -7,8 +7,8 @@ use crate::error::SlopError;
 use crate::graph;
 use crate::models::{CliArgs, IgnoreReason, IgnoredEntry, SoupMetaBlock, SourceFile};
 use crate::pathing::{
-    build_output_filename, collect_source_files_reporting, filename_token, resolve_absolute,
-    resolve_output_dir, should_respect_gitignore,
+    build_output_filename, collect_source_files_reporting_with_slopignore, filename_token,
+    resolve_absolute, resolve_output_dir, should_respect_gitignore,
 };
 use crate::secrets;
 use crate::selection;
@@ -46,11 +46,16 @@ pub fn run_slop(args: &CliArgs, config: &Config) -> Result<PathBuf, SlopError> {
         Some(0)
     };
     let respect_gitignore = should_respect_gitignore(args.respect_gitignore, config);
-    let walk = collect_source_files_reporting(
+    let skip_slopignore = args.ignore_slopignore
+        || (config.skip_slopignore_for_full_statement
+            && !selection::selection_mode(args)
+            && resolved_inputs.iter().all(|input| input.is_file()));
+    let walk = collect_source_files_reporting_with_slopignore(
         &resolved_inputs,
         max_depth,
         &args.exclude,
         respect_gitignore,
+        skip_slopignore,
     )?;
     let candidate_files = walk.files;
     let forced_files = walk.forced_files;

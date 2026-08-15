@@ -15,6 +15,8 @@ pub struct Config {
     pub slopified_folder: Option<PathBuf>,
     pub include_graph: bool,
     pub respect_gitignore: bool,
+    #[serde(alias = "ignore_slopignore_for_full_statement")]
+    pub skip_slopignore_for_full_statement: bool,
     pub graph_map_tokens: usize,
     pub graph_format: String,
     pub graph_force_include_supertypes: bool,
@@ -44,6 +46,7 @@ impl Default for Config {
             slopified_folder: None,
             include_graph: false,
             respect_gitignore: false,
+            skip_slopignore_for_full_statement: false,
             graph_map_tokens: 2048,
             graph_format: "repomap".to_string(),
             graph_force_include_supertypes: true,
@@ -119,6 +122,10 @@ pub fn default_config_yaml() -> String {
          # target repo's .gitignore when walking a directory. Override\n\
          # per-run with --respect-gitignore.\n\
          respect_gitignore: {respect_gitignore}\n\n\
+         # If true, an invocation naming only explicit files skips the repo's\n\
+         # .slopignore (including its slopinclude directives). Override per-run\n\
+         # with --ignore-slopignore.\n\
+         skip_slopignore_for_full_statement: {skip_slopignore}\n\n\
          # RepoMapper --map-tokens; compactness lever for the graph.\n\
          graph_map_tokens: {graph_tokens}\n\n\
          # Graph format: repomap | dot | json | mermaid\n\
@@ -167,6 +174,7 @@ pub fn default_config_yaml() -> String {
         slopified = "~/.slop/slopified",
         include_graph = false,
         respect_gitignore = false,
+        skip_slopignore = false,
         graph_tokens = 2048,
         graph_format = "repomap",
         force_supertypes = true,
@@ -291,6 +299,7 @@ mod tests {
         );
         assert!(config.include_graph);
         assert!(config.respect_gitignore);
+        assert!(!config.skip_slopignore_for_full_statement);
         assert_eq!(config.graph_map_tokens, 1024);
         assert_eq!(config.graph_format, "dot");
         assert!(!config.graph_force_include_supertypes);
@@ -306,6 +315,7 @@ mod tests {
         assert!(config.slopified_folder.is_none());
         assert!(!config.include_graph);
         assert!(!config.respect_gitignore);
+        assert!(!config.skip_slopignore_for_full_statement);
         assert_eq!(config.graph_map_tokens, 2048);
         assert_eq!(config.graph_format, "repomap");
         assert!(config.graph_force_include_supertypes);
@@ -321,6 +331,7 @@ mod tests {
         assert!(yaml.contains("slopified_folder:"));
         assert!(yaml.contains("include_graph:"));
         assert!(yaml.contains("respect_gitignore:"));
+        assert!(yaml.contains("skip_slopignore_for_full_statement:"));
         assert!(yaml.contains("graph_map_tokens:"));
         assert!(yaml.contains("graph_format:"));
         assert!(yaml.contains("graph_force_include_supertypes:"));
@@ -369,6 +380,16 @@ mod tests {
             config.deslop_cache_path,
             Some(PathBuf::from("/tmp/blocks"))
         );
+    }
+
+    #[test]
+    fn parses_skip_slopignore_for_full_statement() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("config.yaml");
+        fs::write(&path, "skip_slopignore_for_full_statement: true\n").expect("write config");
+
+        let config = load_config_from(&path).expect("should parse");
+        assert!(config.skip_slopignore_for_full_statement);
     }
 
     #[test]
