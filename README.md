@@ -176,13 +176,13 @@ Or let slop find the right slop automatically by passing the files the AI edited
 slop -d src/auth.py src/models.py
 ```
 
-You can also paste a complete slop document directly into the terminal. Run `slop -d` with no selector, paste the blocks, then signal end-of-input with `Ctrl-D`:
+You can also paste a complete slop document directly into the terminal. Run `slop -d` with no selector to open **Manual deslop mode** in the current terminal window. It opens as a blank editor with a status bar showing `Ctrl-D to deslop` and `Ctrl-C to cancel`; arrow keys, Home/End, Backspace, Delete, and pasted text all work normally.
 
 ```text
 slop -d
 #SLOP "/absolute/path/to/file.swift" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 1
 updated content
-<Ctrl-D>
+Ctrl-D
 ```
 
 Piped input works the same way:

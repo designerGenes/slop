@@ -4,6 +4,7 @@ pub mod deslop;
 pub mod error;
 pub mod graph;
 pub mod logo;
+pub mod manual_deslop;
 pub mod models;
 pub mod open;
 pub mod pathing;

@@ -32,6 +32,12 @@ pub enum SlopError {
     #[error("failed to write file {path}: {source}")]
     FileWriteFailure { path: PathBuf, source: io::Error },
 
+    #[error("terminal interaction failed: {0}")]
+    TerminalInteractionFailure(io::Error),
+
+    #[error("manual deslop cancelled")]
+    ManualDeslopCancelled,
+
     #[error("slop parse failure: {0}")]
     SoupParseFailure(String),
 

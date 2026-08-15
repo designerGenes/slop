@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
@@ -427,13 +427,18 @@ fn read_slop_document(path: &Path) -> Result<SoupDocument, SlopError> {
 }
 
 fn read_slop_document_from_stdin() -> Result<SoupDocument, SlopError> {
-    let mut markdown = String::new();
-    io::stdin()
-        .read_to_string(&mut markdown)
-        .map_err(|error| SlopError::FileReadFailure {
-            path: PathBuf::from("<stdin>"),
-            source: error,
-        })?;
+    let markdown = if io::stdin().is_terminal() && io::stdout().is_terminal() {
+        crate::manual_deslop::read_document()?
+    } else {
+        let mut markdown = String::new();
+        io::stdin()
+            .read_to_string(&mut markdown)
+            .map_err(|error| SlopError::FileReadFailure {
+                path: PathBuf::from("<stdin>"),
+                source: error,
+            })?;
+        markdown
+    };
     parse_document(&markdown)
 }
 
