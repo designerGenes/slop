@@ -1,7 +1,7 @@
 use std::cmp::min;
 use std::io::{self, Stdout, Write};
 
-use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::cursor::{MoveTo, Show};
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers,
@@ -17,7 +17,7 @@ const STATUS: &str = " Manual deslop mode | Ctrl-D to deslop | Ctrl-C to cancel 
 pub fn read_document() -> Result<String, SlopError> {
     terminal::enable_raw_mode().map_err(SlopError::TerminalInteractionFailure)?;
     let mut output = io::stdout();
-    if let Err(error) = execute!(output, EnterAlternateScreen, Hide, EnableBracketedPaste) {
+    if let Err(error) = execute!(output, EnterAlternateScreen, Show, EnableBracketedPaste) {
         let _ = terminal::disable_raw_mode();
         return Err(SlopError::TerminalInteractionFailure(error));
     }
@@ -93,6 +93,7 @@ fn render(output: &mut Stdout, buffer: &EditorBuffer) -> Result<(), SlopError> {
         SetAttribute(Attribute::Reverse),
         Print(status),
         SetAttribute(Attribute::Reset),
+        Show,
         MoveTo(
             min(
                 cursor_column.saturating_sub(first_column),
