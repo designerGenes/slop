@@ -4,6 +4,7 @@
 #   mode <id> input=<file|directory> recursive=<true|false|any>
 #        current=<true|false|any> depth=<none|direct-files|current-directory-shallow|unlimited>
 #   rule <id> priority=<0..255> action=<include|exclude|skip|error>
+#        [when=respect-gitignore]
 #
 # A path may match several rules. Its highest-priority action wins. This is
 # intentionally analogous to .gitignore's explicit, ordered rule resolution,
@@ -27,9 +28,11 @@ rule direct-file priority=90 action=include
 # under ignored folders or beyond shallow traversal.
 rule slopinclude priority=80 action=include
 
-# A .slopignore pattern is more specific to slop than a .gitignore pattern.
+# A .slopignore pattern is always active for directory walks. A .gitignore
+# pattern enters the decision set only when --respect-gitignore (or its config
+# default) is active, so it cannot influence an ordinary slop command.
 rule slopignore priority=70 action=exclude
-rule gitignore priority=60 action=exclude
+rule gitignore priority=60 action=exclude when=respect-gitignore
 
 # Ordinary eligible files are selected when no higher-priority rule applies.
 rule directory-walk priority=10 action=include

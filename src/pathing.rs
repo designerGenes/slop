@@ -599,7 +599,7 @@ fn collect_path(
 
     // If it's a directory, traverse it with the specified depth
     if metadata.is_dir() {
-        if respect_gitignore {
+        if respect_gitignore && rules_manifest::gitignore_excludes(respect_gitignore) {
             return collect_dir_respecting_gitignore(
                 input,
                 seen,

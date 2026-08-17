@@ -79,6 +79,12 @@ struct Mode {
 struct Rule {
     priority: u8,
     action: Action,
+    condition: Option<RuleCondition>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuleCondition {
+    RespectGitignore,
 }
 
 #[derive(Debug)]
@@ -129,13 +135,29 @@ fn parse_manifest(contents: &str) -> Result<RulesManifest, String> {
                     depth: parse_value(fields[5], "depth", line_number + 1, parse_depth)?,
                 });
             }
-            Some("rule") if fields.len() == 4 => {
+            Some("rule") if (4..=5).contains(&fields.len()) => {
                 let id = parse_rule_id(fields[1])?;
                 if rules.contains_key(&id) {
                     return Err(format!(
                         "line {}: duplicate rule {}",
                         line_number + 1,
                         fields[1]
+                    ));
+                }
+                let condition = if let Some(field) = fields.get(4) {
+                    Some(parse_value(
+                        field,
+                        "when",
+                        line_number + 1,
+                        parse_rule_condition,
+                    )?)
+                } else {
+                    None
+                };
+                if condition.is_some() && id != RuleId::GitIgnore {
+                    return Err(format!(
+                        "line {}: only gitignore may use a condition",
+                        line_number + 1
                     ));
                 }
                 rules.insert(
@@ -147,6 +169,7 @@ fn parse_manifest(contents: &str) -> Result<RulesManifest, String> {
                                 .map_err(|_| "expected 0..255".to_string())
                         })?,
                         action: parse_value(fields[3], "action", line_number + 1, parse_action)?,
+                        condition,
                     },
                 );
             }
@@ -216,6 +239,13 @@ fn parse_action(value: &str) -> Result<Action, String> {
         "skip" => Ok(Action::Skip),
         "error" => Ok(Action::Error),
         _ => Err("expected include, exclude, skip, or error".to_string()),
+    }
+}
+
+fn parse_rule_condition(value: &str) -> Result<RuleCondition, String> {
+    match value {
+        "respect-gitignore" => Ok(RuleCondition::RespectGitignore),
+        _ => Err("expected respect-gitignore".to_string()),
     }
 }
 
@@ -335,6 +365,15 @@ pub fn runs_slopincludes() -> bool {
     manifest().rules[&RuleId::SlopInclude].action == Action::Include
 }
 
+pub fn gitignore_excludes(respect_gitignore: bool) -> bool {
+    let rule = manifest().rules[&RuleId::GitIgnore];
+    rule.action == Action::Exclude
+        && match rule.condition {
+            Some(RuleCondition::RespectGitignore) => respect_gitignore,
+            None => true,
+        }
+}
+
 pub fn skips(action: PathAction) -> bool {
     manifest().rules[&rule_id_for(action)].action == Action::Skip
 }
@@ -376,6 +415,12 @@ mod tests {
         assert!(!selects_direct_file(true));
         assert!(selects_slopinclude(false));
         assert!(!selects_slopinclude(true));
+    }
+
+    #[test]
+    fn gitignore_rule_requires_explicit_opt_in() {
+        assert!(!gitignore_excludes(false));
+        assert!(gitignore_excludes(true));
     }
 
     #[test]
