@@ -1,6 +1,6 @@
 # SlopIgnore Syntax for VS Code
 
-This local extension registers `.slopignore` as the `slopignore` language. It assigns the `keyword.control.slopinclude` scope to directives beginning with `slopinclude` or `+`, and `keyword.control.slopheap` to complete opening and closing slopheap directives.
+This local extension registers `.slopignore` as the `slopignore` language. It assigns the `keyword.control.slopinclude` scope to directives beginning with `slopinclude` or `+`, and to complete opening and closing slopheap directives.
 
 The extension contributes a token-color default that colors both unique directive scopes yellow (`#FFD700`) in any workspace, including when a `.slopignore` file is opened outside the slop project workspace. The project setting in `/Users/jadennation/DEV/01_active_projects/slop/.vscode/settings.json` mirrors that default for the source workspace.
 
