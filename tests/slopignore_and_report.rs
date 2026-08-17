@@ -494,6 +494,54 @@ fn current_directory_without_slopignore_uses_manifest_shallow_walk() {
     );
 }
 
+#[test]
+fn manifest_resolves_include_folder_and_cli_exclude_precedence() {
+    let temp = tempdir().expect("tempdir should exist");
+    let home = temp.path().join("home");
+    let root = temp.path().join("project_root");
+    let included_dir = root.join("someFolder");
+    fs::create_dir_all(&included_dir).expect("included directory should exist");
+    fs::write(root.join("baseline.txt"), "baseline").expect("baseline file should be written");
+    fs::write(included_dir.join("kept.py"), "included-python")
+        .expect("python file should be written");
+    fs::write(included_dir.join("ignored.txt"), "ignored-folder-file")
+        .expect("folder file should be written");
+    fs::write(root.join(".slopignore"), "someFolder/\n+ *.py\n")
+        .expect("slopignore should be written");
+
+    let include_output = temp.path().join("include-out");
+    cargo_bin(&home)
+        .current_dir(&root)
+        .args(["-r", "-o"])
+        .arg(&include_output)
+        .arg(".")
+        .assert()
+        .success();
+
+    let included = read_only_slop(&include_output);
+    assert!(
+        included.contains("included-python"),
+        "+ *.py must override the someFolder/ ignore rule"
+    );
+    assert!(!included.contains("ignored-folder-file"));
+
+    let excluded_output = temp.path().join("excluded-out");
+    cargo_bin(&home)
+        .current_dir(&root)
+        .args(["-r", "-x", "*.py", "-o"])
+        .arg(&excluded_output)
+        .arg(".")
+        .assert()
+        .success();
+
+    let excluded = read_only_slop(&excluded_output);
+    assert!(excluded.contains("baseline"));
+    assert!(
+        !excluded.contains("included-python"),
+        "-x *.py must override the + *.py include directive"
+    );
+}
+
 fn read_only_slop(output_dir: &Path) -> String {
     let entry = fs::read_dir(output_dir)
         .expect("output dir should exist")

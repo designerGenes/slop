@@ -10,7 +10,7 @@ use walkdir::WalkDir;
 use crate::config::Config;
 use crate::error::SlopError;
 use crate::models::{IgnoreReason, IgnoredEntry, WalkReport};
-use crate::rules_manifest::{self, Depth};
+use crate::rules_manifest::{self, Depth, PathAction};
 use crate::slopignore::SlopIgnore;
 
 /// Shared sink for `.slopignore` hits. The `ignore` crate requires its
@@ -264,13 +264,14 @@ pub fn collect_source_files_reporting_with_slopignore(
             &ignored,
             policy,
         )?;
-        if policy.run_include_directives && policy.include_precedence {
+        if rules_manifest::runs_slopincludes() {
             collect_includes(
                 &slopignore,
                 &mut seen,
                 &mut files,
                 &mut forced_seen,
                 &mut forced_files,
+                &exclusion_matcher,
             )?;
         }
     }
@@ -312,9 +313,17 @@ fn collect_includes(
     files: &mut Vec<PathBuf>,
     forced_seen: &mut BTreeSet<PathBuf>,
     forced_files: &mut Vec<PathBuf>,
+    exclusion_matcher: &ExclusionMatcher,
 ) -> Result<(), SlopError> {
     for path in slopignore.explicit_includes() {
-        include_path(path, seen, files, forced_seen, forced_files)?;
+        include_path(
+            path,
+            seen,
+            files,
+            forced_seen,
+            forced_files,
+            exclusion_matcher,
+        )?;
     }
 
     let Some(root) = slopignore.include_root() else {
@@ -337,7 +346,14 @@ fn collect_includes(
             {
                 continue;
             }
-            include_file(entry.path(), seen, files, forced_seen, forced_files)?;
+            include_file(
+                entry.path(),
+                seen,
+                files,
+                forced_seen,
+                forced_files,
+                exclusion_matcher,
+            )?;
         }
     }
     Ok(())
@@ -349,6 +365,7 @@ fn include_path(
     files: &mut Vec<PathBuf>,
     forced_seen: &mut BTreeSet<PathBuf>,
     forced_files: &mut Vec<PathBuf>,
+    exclusion_matcher: &ExclusionMatcher,
 ) -> Result<(), SlopError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -360,11 +377,18 @@ fn include_path(
             });
         }
     };
-    if metadata.file_type().is_symlink() {
+    if metadata.file_type().is_symlink() && rules_manifest::skips(PathAction::Symlink) {
         return Ok(());
     }
     if !metadata.is_dir() {
-        return include_file(path, seen, files, forced_seen, forced_files);
+        return include_file(
+            path,
+            seen,
+            files,
+            forced_seen,
+            forced_files,
+            exclusion_matcher,
+        );
     }
 
     for entry in WalkDir::new(path).follow_links(false) {
@@ -379,7 +403,14 @@ fn include_path(
             }
         })?;
         if entry.file_type().is_file() {
-            include_file(entry.path(), seen, files, forced_seen, forced_files)?;
+            include_file(
+                entry.path(),
+                seen,
+                files,
+                forced_seen,
+                forced_files,
+                exclusion_matcher,
+            )?;
         }
     }
     Ok(())
@@ -391,6 +422,7 @@ fn include_file(
     files: &mut Vec<PathBuf>,
     forced_seen: &mut BTreeSet<PathBuf>,
     forced_files: &mut Vec<PathBuf>,
+    exclusion_matcher: &ExclusionMatcher,
 ) -> Result<(), SlopError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -405,7 +437,10 @@ fn include_file(
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Ok(());
     }
-    if !is_plaintext(path) {
+    if !rules_manifest::selects_slopinclude(exclusion_matcher.should_exclude(path)) {
+        return Ok(());
+    }
+    if !is_plaintext(path) && rules_manifest::skips(PathAction::NonText) {
         eprintln!("warning: skipping non-text file: {}", path.display());
         return Ok(());
     }
@@ -427,10 +462,11 @@ fn include_file(
 /// include scans can otherwise duplicate an explicitly named file.
 fn insert_unique_path(seen: &mut BTreeSet<PathBuf>, path: &Path) -> bool {
     if seen.contains(path) {
-        return false;
+        return !rules_manifest::skips(PathAction::Duplicate);
     }
     let canonical = path.canonicalize().ok();
-    if canonical.is_some()
+    if rules_manifest::skips(PathAction::Duplicate)
+        && canonical.is_some()
         && seen
             .iter()
             .filter_map(|existing| existing.canonicalize().ok())
@@ -543,14 +579,17 @@ fn collect_path(
     })?;
 
     let file_type = metadata.file_type();
-    if file_type.is_symlink() || !is_supported_file_type(&file_type) {
+    if file_type.is_symlink() && rules_manifest::skips(PathAction::Symlink) {
+        return Ok(());
+    }
+    if !is_supported_file_type(&file_type) && rules_manifest::errors(PathAction::UnsupportedFile) {
         return Err(SlopError::UnsupportedFileType(input.to_path_buf()));
     }
 
     // A file named explicitly on the command line is always slopped:
     // .slopignore governs directory walks, not deliberate requests.
     if metadata.is_file() {
-        if (!policy.apply_excludes || !exclusion_matcher.should_exclude(input))
+        if rules_manifest::selects_direct_file(exclusion_matcher.should_exclude(input))
             && insert_unique_path(seen, input)
         {
             files.push(input.to_path_buf());
@@ -652,11 +691,13 @@ fn collect_dir(
             let is_dir = entry.file_type().is_dir();
             if is_dir {
                 let name = entry.file_name().to_string_lossy();
-                if SKIP_DIRS.contains(&name.as_ref()) {
+                if SKIP_DIRS.contains(&name.as_ref())
+                    && rules_manifest::skips(PathAction::HardDirectory)
+                {
                     return false;
                 }
             }
-            if policy.apply_ignore_patterns
+            if rules_manifest::slopignore_excludes()
                 && filter_slopignore.is_ignored(entry.path(), is_dir)
             {
                 record_ignored(
@@ -700,28 +741,34 @@ fn collect_dir(
             })?;
 
         let entry_type = entry_metadata.file_type();
-        if entry_type.is_symlink() {
+        if entry_type.is_symlink() && rules_manifest::skips(PathAction::Symlink) {
             continue;
         }
 
-        if !is_supported_file_type(&entry_type) {
+        if !is_supported_file_type(&entry_type) && rules_manifest::errors(PathAction::UnsupportedFile) {
             return Err(SlopError::UnsupportedFileType(entry_path.to_path_buf()));
         }
 
         if entry_metadata.is_file() {
-            if policy.apply_excludes && exclusion_matcher.should_exclude(entry_path) {
+            if !rules_manifest::selects_directory_file(
+                exclusion_matcher.should_exclude(entry_path),
+            ) {
                 record_ignored(ignored, entry_path, false, IgnoreReason::Exclude);
                 continue;
             }
             if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
-                if SKIP_EXTS.contains(&ext) {
+                if SKIP_EXTS.contains(&ext) && rules_manifest::skips(PathAction::IgnoredExtension) {
                     continue;
                 }
             }
-            if crate::slop_format::is_slop_file(entry_path) || is_slopignore_file(entry_path) {
+            if (crate::slop_format::is_slop_file(entry_path)
+                && rules_manifest::skips(PathAction::GeneratedSlop))
+                || (is_slopignore_file(entry_path)
+                    && rules_manifest::skips(PathAction::SlopIgnoreFile))
+            {
                 continue;
             }
-            if !is_plaintext(entry_path) {
+            if !is_plaintext(entry_path) && rules_manifest::skips(PathAction::NonText) {
                 eprintln!("warning: skipping non-text file: {}", entry_path.display());
                 continue;
             }
@@ -794,11 +841,13 @@ fn collect_dir_respecting_gitignore(
                 let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
                 if is_dir {
                     let name = entry.file_name().to_string_lossy();
-                    if SKIP_DIRS.contains(&name.as_ref()) {
+                    if SKIP_DIRS.contains(&name.as_ref())
+                        && rules_manifest::skips(PathAction::HardDirectory)
+                    {
                         return false;
                     }
                 }
-                if policy.apply_ignore_patterns
+                if rules_manifest::slopignore_excludes()
                     && filter_slopignore.is_ignored(entry.path(), is_dir)
                 {
                     record_ignored(
@@ -832,28 +881,34 @@ fn collect_dir_respecting_gitignore(
             })?;
 
         let entry_type = entry_metadata.file_type();
-        if entry_type.is_symlink() {
+        if entry_type.is_symlink() && rules_manifest::skips(PathAction::Symlink) {
             continue;
         }
 
-        if !is_supported_file_type(&entry_type) {
+        if !is_supported_file_type(&entry_type) && rules_manifest::errors(PathAction::UnsupportedFile) {
             return Err(SlopError::UnsupportedFileType(entry_path.to_path_buf()));
         }
 
         if entry_metadata.is_file() {
-            if policy.apply_excludes && exclusion_matcher.should_exclude(entry_path) {
+            if !rules_manifest::selects_directory_file(
+                exclusion_matcher.should_exclude(entry_path),
+            ) {
                 record_ignored(ignored, entry_path, false, IgnoreReason::Exclude);
                 continue;
             }
             if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
-                if SKIP_EXTS.contains(&ext) {
+                if SKIP_EXTS.contains(&ext) && rules_manifest::skips(PathAction::IgnoredExtension) {
                     continue;
                 }
             }
-            if crate::slop_format::is_slop_file(entry_path) || is_slopignore_file(entry_path) {
+            if (crate::slop_format::is_slop_file(entry_path)
+                && rules_manifest::skips(PathAction::GeneratedSlop))
+                || (is_slopignore_file(entry_path)
+                    && rules_manifest::skips(PathAction::SlopIgnoreFile))
+            {
                 continue;
             }
-            if !is_plaintext(entry_path) {
+            if !is_plaintext(entry_path) && rules_manifest::skips(PathAction::NonText) {
                 eprintln!("warning: skipping non-text file: {}", entry_path.display());
                 continue;
             }

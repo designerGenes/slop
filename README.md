@@ -86,7 +86,7 @@ This walks the directory the same way `git` would: any file or folder matched by
 respect_gitignore: true
 ```
 
-Use a project `.slopignore` for slop-specific exclusions. It accepts `.gitignore`-style patterns, plus `+ pattern` or `slopinclude pattern` to force a matching file into every slop. Includes override `.slopignore` and `.gitignore` filtering, bypass shallow traversal, and may name an external file through `$HOME`:
+Use a project `.slopignore` for slop-specific exclusions. It accepts `.gitignore`-style patterns, plus `+ pattern` or `slopinclude pattern` to force a matching file into every slop. Includes override `.slopignore` and `.gitignore` filtering, bypass shallow traversal, and may name an external file through `$HOME`. Command-line `-x` exclusions remain the final override and apply to forced includes too:
 
 ```text
 generated/
@@ -96,7 +96,7 @@ slopinclude $HOME/shared/api-contract.md
 
 Files explicitly listed on the command line and matched by one or more include rules are bundled only once.
 
-The complete selection precedence is defined in [`resources/slop-rules.yaml`](resources/slop-rules.yaml), a commentable, versioned DSL embedded in the binary. It distinguishes direct file requests, recursive directory walks, `slop .`, and named shallow directories. `.slopignore` supplies the familiar gitignore-style patterns within the directory-walk rules; a missing `.slopignore` means `slop .` performs its normal shallow walk, not a recursive or include-directed walk. `+ pattern` and `slopinclude pattern` run after ordinary traversal and take precedence over `.slopignore` and `.gitignore` matches.
+The complete selection precedence is defined in [`resources/slop-rules.manifest`](resources/slop-rules.manifest), an executable, commentable DSL embedded in the binary. It defines every path-collection action and its priority, including direct files, `-x`, `.slopignore`, `.gitignore`, `slopinclude`, safety skips, duplicate handling, and traversal modes. A path's highest-priority matching action wins: `-x` overrides direct paths and include directives; include directives override `.slopignore` and `.gitignore`; and `.slopignore` overrides `.gitignore`. A missing `.slopignore` means `slop .` performs its normal shallow walk, not a recursive or include-directed walk.
 
 When you provide only explicit file paths, you can make that list authoritative and skip the repository's `.slopignore` file, including its `slopinclude` directives:
 

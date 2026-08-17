@@ -1,0 +1,47 @@
+# Slop path-selection manifest, evaluated by priority (higher wins).
+#
+# Grammar:
+#   mode <id> input=<file|directory> recursive=<true|false|any>
+#        current=<true|false|any> depth=<none|direct-files|current-directory-shallow|unlimited>
+#   rule <id> priority=<0..255> action=<include|exclude|skip|error>
+#
+# A path may match several rules. Its highest-priority action wins. This is
+# intentionally analogous to .gitignore's explicit, ordered rule resolution,
+# but adds command-line and slopinclude sources to the same decision system.
+
+# Invocation modes determine traversal before individual paths are considered.
+mode direct-file input=file recursive=any current=any depth=none
+mode recursive-directory input=directory recursive=true current=any depth=unlimited
+mode shallow-current-directory input=directory recursive=false current=true depth=current-directory-shallow
+mode shallow-named-directory input=directory recursive=false current=false depth=direct-files
+
+# Command-line exclusions are the final user override. They win even when a
+# direct file or `+ *.py` / `slopinclude *.py` directive would otherwise include
+# the path.
+rule cli-exclude priority=100 action=exclude
+
+# An explicit file is intentional, so it bypasses repository ignore rules.
+rule direct-file priority=90 action=include
+
+# Include directives override both kinds of ignore rule and may rescue files
+# under ignored folders or beyond shallow traversal.
+rule slopinclude priority=80 action=include
+
+# A .slopignore pattern is more specific to slop than a .gitignore pattern.
+rule slopignore priority=70 action=exclude
+rule gitignore priority=60 action=exclude
+
+# Ordinary eligible files are selected when no higher-priority rule applies.
+rule directory-walk priority=10 action=include
+
+# Safety and output rules are also part of the same manifest. They describe
+# every terminal decision in the path collector rather than leaving hidden
+# hard-coded policy in the walker.
+rule symlink priority=100 action=skip
+rule hard-directory priority=100 action=skip
+rule unsupported-file priority=100 action=error
+rule ignored-extension priority=100 action=skip
+rule generated-slop priority=100 action=skip
+rule slopignore-file priority=100 action=skip
+rule non-text priority=100 action=skip
+rule duplicate priority=100 action=skip
