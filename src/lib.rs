@@ -9,6 +9,7 @@ pub mod models;
 pub mod open;
 pub mod pathing;
 pub mod repomap;
+pub mod rules_manifest;
 pub mod secrets;
 pub mod selection;
 pub mod sharktopus;

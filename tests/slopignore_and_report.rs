@@ -464,6 +464,35 @@ fn subfolder_slopignore_files_are_ignored_by_default_and_during_directory_includ
     );
 }
 
+#[test]
+fn current_directory_without_slopignore_uses_manifest_shallow_walk() {
+    let temp = tempdir().expect("tempdir should exist");
+    let home = temp.path().join("home");
+    let root = temp.path().join("project_root");
+    let output_dir = temp.path().join("out");
+    fs::create_dir_all(root.join("child/grandchild")).expect("dirs should be created");
+    fs::write(root.join("top.txt"), "top-level").expect("top file should be written");
+    fs::write(root.join("child/near.txt"), "immediate-child")
+        .expect("near file should be written");
+    fs::write(root.join("child/grandchild/deep.txt"), "too-deep")
+        .expect("deep file should be written");
+
+    cargo_bin(&home)
+        .current_dir(&root)
+        .args(["-o"])
+        .arg(&output_dir)
+        .arg(".")
+        .assert()
+        .success();
+
+    let slop = read_only_slop(&output_dir);
+    assert!(slop.contains("top-level"));
+    assert!(slop.contains("immediate-child"));
+    assert!(
+        !slop.contains("too-deep"),
+        "a missing .slopignore must not turn slop . into a recursive walk"
+    );
+}
 
 fn read_only_slop(output_dir: &Path) -> String {
     let entry = fs::read_dir(output_dir)

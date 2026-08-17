@@ -10,6 +10,7 @@ use walkdir::WalkDir;
 use crate::config::Config;
 use crate::error::SlopError;
 use crate::models::{IgnoreReason, IgnoredEntry, WalkReport};
+use crate::rules_manifest::{self, Depth};
 use crate::slopignore::SlopIgnore;
 
 /// Shared sink for `.slopignore` hits. The `ignore` crate requires its
@@ -244,6 +245,7 @@ pub fn collect_source_files_reporting_with_slopignore(
 
     for input in inputs {
         let depth = max_depth.unwrap_or(0);
+        let policy = rules_manifest::policy_for(input, depth == usize::MAX);
         // Discovered per input: two inputs can sit in different repos, each
         // with its own .slopignore.
         let slopignore = if skip_slopignore {
@@ -260,14 +262,17 @@ pub fn collect_source_files_reporting_with_slopignore(
             respect_gitignore,
             &slopignore,
             &ignored,
+            policy,
         )?;
-        collect_includes(
-            &slopignore,
-            &mut seen,
-            &mut files,
-            &mut forced_seen,
-            &mut forced_files,
-        )?;
+        if policy.run_include_directives && policy.include_precedence {
+            collect_includes(
+                &slopignore,
+                &mut seen,
+                &mut files,
+                &mut forced_seen,
+                &mut forced_files,
+            )?;
+        }
     }
 
     files.sort_by(compare_paths_for_output);
@@ -524,6 +529,7 @@ fn collect_path(
     respect_gitignore: bool,
     slopignore: &Arc<SlopIgnore>,
     ignored: &IgnoredSink,
+    policy: rules_manifest::Policy,
 ) -> Result<(), SlopError> {
     let metadata = fs::symlink_metadata(input).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -544,7 +550,9 @@ fn collect_path(
     // A file named explicitly on the command line is always slopped:
     // .slopignore governs directory walks, not deliberate requests.
     if metadata.is_file() {
-        if !exclusion_matcher.should_exclude(input) && insert_unique_path(seen, input) {
+        if (!policy.apply_excludes || !exclusion_matcher.should_exclude(input))
+            && insert_unique_path(seen, input)
+        {
             files.push(input.to_path_buf());
         }
         return Ok(());
@@ -561,6 +569,7 @@ fn collect_path(
                 exclusion_matcher,
                 slopignore,
                 ignored,
+                policy,
             );
         }
         return collect_dir(
@@ -571,32 +580,28 @@ fn collect_path(
             exclusion_matcher,
             slopignore,
             ignored,
+            policy,
         );
     }
 
     Err(SlopError::UnsupportedFileType(input.to_path_buf()))
 }
 
-/// Whether `input` is the process's current working directory. Shallow mode
-/// (max_depth == 0) allows one extra level of depth when sloping "." so that
-/// files inside immediate subdirectories are still picked up.
-fn is_current_dir(input: &Path) -> bool {
-    let cwd = std::env::current_dir().ok();
-    let resolved = std::fs::canonicalize(input).ok();
-    cwd.as_ref()
-        .and_then(|c| resolved.as_ref().map(|r| c == r))
-        .unwrap_or(false)
-}
+/// Resolve the effective traversal depth from the manifest for ordinary CLI
+/// requests. Shallow current-directory mode includes one extra level so that
+/// `slop .` retains files inside immediate child directories.
+fn max_allowed_depth(max_depth: usize, policy: rules_manifest::Policy) -> usize {
+    // The manifest covers ordinary CLI traversal. Preserve nonstandard finite
+    // depths for library callers that use this lower-level API directly.
+    if max_depth != 0 && max_depth != usize::MAX {
+        return max_depth;
+    }
 
-fn max_allowed_depth(max_depth: usize, input: &Path) -> usize {
-    // For shallow mode (max_depth=0):
-    // - If input is current directory (like "."), we want depth <= 2 (files in current dir + immediate children of subdirs)
-    // - If input is a subdirectory, we want depth <= 1 (files directly in this dir only)
-    // For full recursion (max_depth=usize::MAX), we want everything
-    if max_depth == 0 {
-        if is_current_dir(input) { 2 } else { 1 }
-    } else {
-        max_depth
+    match policy.depth {
+        Some(Depth::Unlimited) => usize::MAX,
+        Some(Depth::CurrentDirectoryShallow) => 2,
+        Some(Depth::DirectFiles) => 1,
+        None => max_depth,
     }
 }
 
@@ -620,6 +625,7 @@ pub(crate) fn containing_git_root(input: &Path) -> Option<PathBuf> {
 
 /// Default directory walk: no `.gitignore` awareness, just the hardcoded
 /// `SKIP_DIRS`/`SKIP_EXTS` prunes plus whatever `-x/--exclude` supplies.
+#[allow(clippy::too_many_arguments)]
 fn collect_dir(
     input: &Path,
     seen: &mut BTreeSet<PathBuf>,
@@ -628,6 +634,7 @@ fn collect_dir(
     exclusion_matcher: &ExclusionMatcher,
     slopignore: &Arc<SlopIgnore>,
     ignored: &IgnoredSink,
+    policy: rules_manifest::Policy,
 ) -> Result<(), SlopError> {
     // Use WalkDir but limit depth if max_depth is 0 (shallow) or usize::MAX (full)
     // max_depth of 0 means immediate children only (depth 1 from input)
@@ -649,7 +656,9 @@ fn collect_dir(
                     return false;
                 }
             }
-            if filter_slopignore.is_ignored(entry.path(), is_dir) {
+            if policy.apply_ignore_patterns
+                && filter_slopignore.is_ignored(entry.path(), is_dir)
+            {
                 record_ignored(
                     &filter_ignored,
                     entry.path(),
@@ -661,7 +670,7 @@ fn collect_dir(
             true
         });
 
-    let max_allowed = max_allowed_depth(max_depth, input);
+    let max_allowed = max_allowed_depth(max_depth, policy);
 
     for entry in walker {
         let entry = entry.map_err(|error| {
@@ -700,7 +709,7 @@ fn collect_dir(
         }
 
         if entry_metadata.is_file() {
-            if exclusion_matcher.should_exclude(entry_path) {
+            if policy.apply_excludes && exclusion_matcher.should_exclude(entry_path) {
                 record_ignored(ignored, entry_path, false, IgnoreReason::Exclude);
                 continue;
             }
@@ -745,6 +754,7 @@ fn collect_dir(
 /// In both modes the scope is otherwise tight: global git config,
 /// `.git/info/exclude`, and plain `.ignore` files are disabled, so behavior
 /// only ever depends on actual `.gitignore` content.
+#[allow(clippy::too_many_arguments)]
 fn collect_dir_respecting_gitignore(
     input: &Path,
     seen: &mut BTreeSet<PathBuf>,
@@ -753,8 +763,9 @@ fn collect_dir_respecting_gitignore(
     exclusion_matcher: &ExclusionMatcher,
     slopignore: &Arc<SlopIgnore>,
     ignored: &IgnoredSink,
+    policy: rules_manifest::Policy,
 ) -> Result<(), SlopError> {
-    let max_allowed = max_allowed_depth(max_depth, input);
+    let max_allowed = max_allowed_depth(max_depth, policy);
 
     // Walk up from `input` looking for the nearest ancestor (inclusive) that
     // owns a `.git` marker. If found, `input` is inside a real git repo, so
@@ -787,7 +798,9 @@ fn collect_dir_respecting_gitignore(
                         return false;
                     }
                 }
-                if filter_slopignore.is_ignored(entry.path(), is_dir) {
+                if policy.apply_ignore_patterns
+                    && filter_slopignore.is_ignored(entry.path(), is_dir)
+                {
                     record_ignored(
                         &filter_ignored,
                         entry.path(),
@@ -828,7 +841,7 @@ fn collect_dir_respecting_gitignore(
         }
 
         if entry_metadata.is_file() {
-            if exclusion_matcher.should_exclude(entry_path) {
+            if policy.apply_excludes && exclusion_matcher.should_exclude(entry_path) {
                 record_ignored(ignored, entry_path, false, IgnoreReason::Exclude);
                 continue;
             }
@@ -858,7 +871,6 @@ fn is_slopignore_file(path: &Path) -> bool {
         .map(|name| name == crate::slopignore::SLOPIGNORE_FILE_NAME)
         .unwrap_or(false)
 }
-
 
 /// Heuristic check used while walking a directory: a file is treated as
 /// non-text (and skipped from the slop) if its leading bytes contain a NUL

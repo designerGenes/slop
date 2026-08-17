@@ -96,6 +96,8 @@ slopinclude $HOME/shared/api-contract.md
 
 Files explicitly listed on the command line and matched by one or more include rules are bundled only once.
 
+The complete selection precedence is defined in [`resources/slop-rules.yaml`](resources/slop-rules.yaml), a commentable, versioned DSL embedded in the binary. It distinguishes direct file requests, recursive directory walks, `slop .`, and named shallow directories. `.slopignore` supplies the familiar gitignore-style patterns within the directory-walk rules; a missing `.slopignore` means `slop .` performs its normal shallow walk, not a recursive or include-directed walk. `+ pattern` and `slopinclude pattern` run after ordinary traversal and take precedence over `.slopignore` and `.gitignore` matches.
+
 When you provide only explicit file paths, you can make that list authoritative and skip the repository's `.slopignore` file, including its `slopinclude` directives:
 
 ```bash
