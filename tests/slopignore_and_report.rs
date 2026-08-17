@@ -542,6 +542,59 @@ fn manifest_resolves_include_folder_and_cli_exclude_precedence() {
     );
 }
 
+#[test]
+fn slopheaps_include_other_roots_with_local_exclusions_and_nesting() {
+    let temp = tempdir().expect("tempdir should exist");
+    let home = temp.path().join("home");
+    let pocket = temp.path().join("pocket");
+    let heap = temp.path().join("project");
+    let nested_heap = temp.path().join("nested-project");
+    let sibling_heap = temp.path().join("sibling-project");
+    let output_dir = temp.path().join("out");
+
+    fs::create_dir_all(&pocket).expect("pocket should exist");
+    fs::create_dir_all(heap.join("src")).expect("heap source dir should exist");
+    fs::create_dir_all(&nested_heap).expect("nested heap should exist");
+    fs::create_dir_all(&sibling_heap).expect("sibling heap should exist");
+    fs::write(pocket.join("pocket.txt"), "pocket-marker").expect("pocket file");
+    fs::write(heap.join("src/keep.rs"), "heap-source-marker").expect("heap source file");
+    fs::write(heap.join("src/excluded.rs"), "heap-excluded-marker")
+        .expect("excluded source file");
+    fs::write(heap.join("tool.py"), "heap-python-marker").expect("heap python file");
+    fs::write(heap.join("other.txt"), "heap-unselected-marker").expect("heap other file");
+    fs::write(nested_heap.join("README.md"), "nested-heap-marker").expect("nested readme");
+    fs::write(sibling_heap.join("sibling.txt"), "sibling-heap-marker")
+        .expect("sibling file");
+
+    fs::write(
+        pocket.join(".slopignore"),
+        format!(
+            "*\n\\/ {}\n  + src/\n  + *.py\n  src/excluded.rs\n  \\/ {}\n    + README.md\n  /\\\n/\\\n\\/ {}\n  + sibling.txt\n/\\\n",
+            heap.display(),
+            nested_heap.display(),
+            sibling_heap.display(),
+        ),
+    )
+    .expect("slopignore should be written");
+
+    cargo_bin(&home)
+        .current_dir(&pocket)
+        .args(["-r", "-o"])
+        .arg(&output_dir)
+        .arg(".")
+        .assert()
+        .success();
+
+    let slop = read_only_slop(&output_dir);
+    assert!(slop.contains("heap-source-marker"));
+    assert!(slop.contains("heap-python-marker"));
+    assert!(slop.contains("nested-heap-marker"));
+    assert!(slop.contains("sibling-heap-marker"));
+    assert!(!slop.contains("pocket-marker"));
+    assert!(!slop.contains("heap-excluded-marker"));
+    assert!(!slop.contains("heap-unselected-marker"));
+}
+
 fn read_only_slop(output_dir: &Path) -> String {
     let entry = fs::read_dir(output_dir)
         .expect("output dir should exist")

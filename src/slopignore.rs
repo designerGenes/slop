@@ -36,6 +36,26 @@ pub struct SlopIgnore {
     explicit_includes: Vec<PathBuf>,
     has_explicit_slopignore_include: bool,
     source: Option<PathBuf>,
+    heaps: Vec<SlopHeap>,
+}
+
+/// A separately rooted group of `.slopignore` rules. Heap ignore patterns are
+/// intentionally evaluated after heap includes so a heap can include a broad
+/// directory and carve out a local exception.
+pub struct SlopHeap {
+    matcher: Gitignore,
+    include_matcher: Option<Gitignore>,
+    explicit_includes: Vec<PathBuf>,
+    has_explicit_slopignore_include: bool,
+}
+
+struct HeapBuilder {
+    root: PathBuf,
+    ignore_builder: GitignoreBuilder,
+    include_builder: GitignoreBuilder,
+    has_local_includes: bool,
+    has_explicit_slopignore_include: bool,
+    explicit_includes: Vec<PathBuf>,
 }
 
 impl SlopIgnore {
@@ -46,6 +66,7 @@ impl SlopIgnore {
             explicit_includes: Vec::new(),
             has_explicit_slopignore_include: false,
             source: None,
+            heaps: Vec::new(),
         }
     }
 
@@ -78,8 +99,41 @@ impl SlopIgnore {
         let mut has_local_includes = false;
         let mut has_explicit_slopignore_include = false;
         let mut explicit_includes = Vec::new();
+        let mut heaps = Vec::new();
+        let mut heap_stack = Vec::new();
         for line in contents.lines() {
-            if let Some(pattern) = include_pattern(line) {
+            let trimmed = line.trim();
+            if let Some(path) = trimmed.strip_prefix(r"\/") {
+                let path = crate::pathing::expand_tilde(Path::new(path.trim()));
+                if !path.is_absolute() {
+                    eprintln!(
+                        "warning: slopheap in {} must use an absolute path; continuing without it",
+                        source.display()
+                    );
+                    return Self::empty();
+                }
+                heap_stack.push(HeapBuilder::new(crate::pathing::normalize_path(&path)));
+            } else if trimmed == r"/\" {
+                let Some(heap) = heap_stack.pop() else {
+                    eprintln!(
+                        "warning: slopheap close without an opening directive in {}; continuing without it",
+                        source.display()
+                    );
+                    return Self::empty();
+                };
+                match heap.build(&source) {
+                    Ok(heap) => heaps.push(heap),
+                    Err(error) => {
+                        eprintln!("warning: {error}; continuing without it");
+                        return Self::empty();
+                    }
+                }
+            } else if let Some(heap) = heap_stack.last_mut() {
+                if let Err(error) = heap.add_line(line, &source) {
+                    eprintln!("warning: {error}; continuing without it");
+                    return Self::empty();
+                }
+            } else if let Some(pattern) = include_pattern(line) {
                 let expanded = crate::pathing::expand_tilde(Path::new(pattern));
                 if expanded.is_absolute() {
                     let norm = crate::pathing::normalize_path(&expanded);
@@ -92,7 +146,9 @@ impl SlopIgnore {
                     if clean_pattern.trim().ends_with(SLOPIGNORE_FILE_NAME) {
                         has_explicit_slopignore_include = true;
                     }
-                    if let Err(error) = include_builder.add_line(Some(source.clone()), clean_pattern) {
+                    if let Err(error) =
+                        include_builder.add_line(Some(source.clone()), clean_pattern)
+                    {
                         eprintln!(
                             "warning: could not compile slopinclude in {}: {error}; continuing without it",
                             source.display()
@@ -108,6 +164,14 @@ impl SlopIgnore {
                 );
                 return Self::empty();
             }
+        }
+
+        if !heap_stack.is_empty() {
+            eprintln!(
+                "warning: slopheap in {} is missing a closing /\\ directive; continuing without it",
+                source.display()
+            );
+            return Self::empty();
         }
 
         let matcher = match builder.build() {
@@ -141,6 +205,7 @@ impl SlopIgnore {
             explicit_includes,
             has_explicit_slopignore_include,
             source: Some(source),
+            heaps,
         }
     }
 
@@ -197,6 +262,116 @@ impl SlopIgnore {
     /// Absolute files named by `slopinclude` directives.
     pub fn explicit_includes(&self) -> &[PathBuf] {
         &self.explicit_includes
+    }
+
+    /// Separately rooted directive groups declared between `\/` and `/\`.
+    pub fn heaps(&self) -> &[SlopHeap] {
+        &self.heaps
+    }
+}
+
+impl HeapBuilder {
+    fn new(root: PathBuf) -> Self {
+        Self {
+            ignore_builder: GitignoreBuilder::new(&root),
+            include_builder: GitignoreBuilder::new(&root),
+            root,
+            has_local_includes: false,
+            has_explicit_slopignore_include: false,
+            explicit_includes: Vec::new(),
+        }
+    }
+
+    fn add_line(&mut self, line: &str, source: &Path) -> Result<(), String> {
+        let heap_source = self.root.join(SLOPIGNORE_FILE_NAME);
+        if let Some(pattern) = include_pattern(line) {
+            let expanded = crate::pathing::expand_tilde(Path::new(pattern));
+            if expanded.is_absolute() {
+                let path = crate::pathing::normalize_path(&expanded);
+                if path.file_name().and_then(|name| name.to_str()) == Some(SLOPIGNORE_FILE_NAME) {
+                    self.has_explicit_slopignore_include = true;
+                }
+                self.explicit_includes.push(path);
+            } else {
+                let pattern = pattern.strip_prefix("./").unwrap_or(pattern);
+                if pattern.trim().ends_with(SLOPIGNORE_FILE_NAME) {
+                    self.has_explicit_slopignore_include = true;
+                }
+                self.include_builder
+                    .add_line(Some(heap_source), pattern)
+                    .map_err(|error| {
+                        format!(
+                            "could not compile slopheap include in {}: {error}",
+                            source.display()
+                        )
+                    })?;
+                self.has_local_includes = true;
+            }
+        } else {
+            self.ignore_builder
+                .add_line(Some(heap_source), line.trim_start())
+                .map_err(|error| {
+                    format!(
+                        "could not compile slopheap rule in {}: {error}",
+                        source.display()
+                    )
+                })?;
+        }
+        Ok(())
+    }
+
+    fn build(self, source: &Path) -> Result<SlopHeap, String> {
+        let matcher = self.ignore_builder.build().map_err(|error| {
+            format!(
+                "could not compile slopheap in {}: {error}",
+                source.display()
+            )
+        })?;
+        let include_matcher = if self.has_local_includes {
+            Some(self.include_builder.build().map_err(|error| {
+                format!(
+                    "could not compile slopheap include in {}: {error}",
+                    source.display()
+                )
+            })?)
+        } else {
+            None
+        };
+        Ok(SlopHeap {
+            matcher,
+            include_matcher,
+            explicit_includes: self.explicit_includes,
+            has_explicit_slopignore_include: self.has_explicit_slopignore_include,
+        })
+    }
+}
+
+impl SlopHeap {
+    pub fn is_ignored(&self, path: &Path, is_dir: bool) -> bool {
+        let relative = path.strip_prefix(self.matcher.path()).unwrap_or(path);
+        self.matcher.matched(relative, is_dir).is_ignore()
+    }
+
+    pub fn is_included(&self, path: &Path, is_dir: bool) -> bool {
+        let Some(matcher) = self.include_matcher.as_ref() else {
+            return false;
+        };
+        let relative = path.strip_prefix(matcher.path()).unwrap_or(path);
+        matcher
+            .matched_path_or_any_parents(relative, is_dir)
+            .is_ignore()
+    }
+
+    pub fn include_root(&self) -> Option<&Path> {
+        self.include_matcher.as_ref().map(|matcher| matcher.path())
+    }
+
+    pub fn explicit_includes(&self) -> &[PathBuf] {
+        &self.explicit_includes
+    }
+
+    pub fn is_explicit_slopignore_included(&self, path: &Path) -> bool {
+        self.explicit_includes.contains(&path.to_path_buf()) || self.has_explicit_slopignore_include
     }
 }
 
@@ -325,6 +500,28 @@ mod tests {
             !ignore.is_ignored(&root.join("slopinclude"), false),
             "the directive must not be compiled as an ordinary ignore rule"
         );
+    }
+
+    #[test]
+    fn heap_patterns_are_rooted_in_the_heap_directory() {
+        let temp = tempdir().expect("tempdir");
+        let pocket = temp.path().join("pocket");
+        let heap_root = temp.path().join("heap");
+        fs::create_dir_all(heap_root.join("src")).expect("heap root");
+        fs::create_dir_all(&pocket).expect("pocket");
+        fs::write(
+            pocket.join(SLOPIGNORE_FILE_NAME),
+            format!(
+                "\\/ {}\n+ src/\nsrc/excluded.rs\n/\\\n",
+                heap_root.display()
+            ),
+        )
+        .expect("slopignore");
+
+        let ignore = SlopIgnore::discover(&pocket);
+        let heap = ignore.heaps().first().expect("heap should be parsed");
+        assert!(heap.is_included(&heap_root.join("src/keep.rs"), false));
+        assert!(heap.is_ignored(&heap_root.join("src/excluded.rs"), false));
     }
 
     #[test]

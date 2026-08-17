@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::error::SlopError;
 use crate::models::{IgnoreReason, IgnoredEntry, WalkReport};
 use crate::rules_manifest::{self, Depth, PathAction};
-use crate::slopignore::SlopIgnore;
+use crate::slopignore::{SlopHeap, SlopIgnore};
 
 /// Shared sink for `.slopignore` hits. The `ignore` crate requires its
 /// `filter_entry` closure to be `Fn + Send + Sync + 'static`, so the sink and
@@ -326,6 +326,17 @@ fn collect_includes(
         )?;
     }
 
+    for heap in slopignore.heaps() {
+        collect_heap_includes(
+            heap,
+            seen,
+            files,
+            forced_seen,
+            forced_files,
+            exclusion_matcher,
+        )?;
+    }
+
     let Some(root) = slopignore.include_root() else {
         return Ok(());
     };
@@ -346,6 +357,126 @@ fn collect_includes(
             {
                 continue;
             }
+            include_file(
+                entry.path(),
+                seen,
+                files,
+                forced_seen,
+                forced_files,
+                exclusion_matcher,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Collect a separately rooted slopheap. Heap ignore rules are evaluated after
+/// a heap include match, allowing `+ src/` with a local exception such as
+/// `src/generated.rs`.
+fn collect_heap_includes(
+    heap: &SlopHeap,
+    seen: &mut BTreeSet<PathBuf>,
+    files: &mut Vec<PathBuf>,
+    forced_seen: &mut BTreeSet<PathBuf>,
+    forced_files: &mut Vec<PathBuf>,
+    exclusion_matcher: &ExclusionMatcher,
+) -> Result<(), SlopError> {
+    for path in heap.explicit_includes() {
+        include_heap_path(
+            heap,
+            path,
+            seen,
+            files,
+            forced_seen,
+            forced_files,
+            exclusion_matcher,
+        )?;
+    }
+
+    let Some(root) = heap.include_root() else {
+        return Ok(());
+    };
+    for entry in WalkDir::new(root).follow_links(false) {
+        let entry = entry.map_err(|error| {
+            let path = error
+                .path()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| root.to_path_buf());
+            SlopError::FileReadFailure {
+                path,
+                source: std::io::Error::other(error.to_string()),
+            }
+        })?;
+        if entry.file_type().is_file()
+            && heap.is_included(entry.path(), false)
+            && !heap.is_ignored(entry.path(), false)
+        {
+            if is_slopignore_file(entry.path())
+                && !heap.is_explicit_slopignore_included(entry.path())
+            {
+                continue;
+            }
+            include_file(
+                entry.path(),
+                seen,
+                files,
+                forced_seen,
+                forced_files,
+                exclusion_matcher,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn include_heap_path(
+    heap: &SlopHeap,
+    path: &Path,
+    seen: &mut BTreeSet<PathBuf>,
+    files: &mut Vec<PathBuf>,
+    forced_seen: &mut BTreeSet<PathBuf>,
+    forced_files: &mut Vec<PathBuf>,
+    exclusion_matcher: &ExclusionMatcher,
+) -> Result<(), SlopError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(SlopError::FileReadFailure {
+                path: path.to_path_buf(),
+                source: error,
+            });
+        }
+    };
+    if metadata.file_type().is_symlink() && rules_manifest::skips(PathAction::Symlink) {
+        return Ok(());
+    }
+    if !metadata.is_dir() {
+        if !heap.is_ignored(path, false) {
+            include_file(
+                path,
+                seen,
+                files,
+                forced_seen,
+                forced_files,
+                exclusion_matcher,
+            )?;
+        }
+        return Ok(());
+    }
+
+    for entry in WalkDir::new(path).follow_links(false) {
+        let entry = entry.map_err(|error| {
+            let path = error
+                .path()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| path.to_path_buf());
+            SlopError::FileReadFailure {
+                path,
+                source: std::io::Error::other(error.to_string()),
+            }
+        })?;
+        if entry.file_type().is_file() && !heap.is_ignored(entry.path(), false) {
             include_file(
                 entry.path(),
                 seen,

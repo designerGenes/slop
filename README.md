@@ -96,6 +96,23 @@ slopinclude $HOME/shared/api-contract.md
 
 Files explicitly listed on the command line and matched by one or more include rules are bundled only once.
 
+Use a `slopheap` block when its rules should be rooted in another absolute directory. The block's ordinary patterns exclude paths from that heap, while its `+` and `slopinclude` patterns select paths beneath that heap. Heap exclusions take precedence within the heap, so a broad include can have a local exception. Heaps may be repeated or nested:
+
+```text
+*
+
+\/ /absolute/path/to/other-project
+  + src/
+  + *.py
+  src/generated.py
+  \/ /absolute/path/to/a-second-project
+    + README.md
+  /\
+/\
+```
+
+The VS Code `.slopignore` extension highlights both `\/` and `/\` directives in light yellow.
+
 The complete selection precedence is defined in [`resources/slop-rules.manifest`](resources/slop-rules.manifest), an executable, commentable DSL embedded in the binary. It defines every path-collection action and its priority, including direct files, `-x`, `.slopignore`, `.gitignore`, `slopinclude`, safety skips, duplicate handling, and traversal modes. A path's highest-priority matching action wins: `-x` overrides direct paths and include directives; include directives override `.slopignore` and `.gitignore`; and `.slopignore` overrides an active `.gitignore`. The `.gitignore` rule is active only with `--respect-gitignore` or `respect_gitignore: true`; it has no effect otherwise. A missing `.slopignore` means `slop .` performs its normal shallow walk, not a recursive or include-directed walk.
 
 When you provide only explicit file paths, you can make that list authoritative and skip the repository's `.slopignore` file, including its `slopinclude` directives:

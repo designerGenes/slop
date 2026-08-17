@@ -4,6 +4,9 @@
   "scopeName": "source.slopignore",
   "patterns": [
     {
+      "include": "#slopheap"
+    },
+    {
       "include": "#comments"
     },
     {
@@ -11,6 +14,28 @@
     }
   ],
   "repository": {
+    "slopheap": {
+      "patterns": [
+        {
+          "match": "^(\\s*)(\\\\/)(?:\\s+.*)?$",
+          "name": "string.quoted.other.slopheap",
+          "captures": {
+            "2": {
+              "name": "string.quoted.other.slopheap"
+            }
+          }
+        },
+        {
+          "match": "^(\\s*)(/\\\\)\\s*$",
+          "name": "string.quoted.other.slopheap",
+          "captures": {
+            "2": {
+              "name": "string.quoted.other.slopheap"
+            }
+          }
+        }
+      ]
+    },
     "comments": {
       "patterns": [
         {
