@@ -2,7 +2,7 @@
   "name": "slopignore-syntax",
   "displayName": "SlopIgnore Syntax",
   "description": "Syntax highlighting for SlopIgnore and SlopHeap directives.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "slop",
   "engines": {
     "vscode": "^1.85.0"
@@ -12,20 +12,18 @@
   ],
   "contributes": {
     "configurationDefaults": {
-      "[slopignore]": {
-        "editor.tokenColorCustomizations": {
-          "textMateRules": [
-            {
-              "scope": [
-                "keyword.control.slopinclude",
-                "keyword.control.slopheap"
-              ],
-              "settings": {
-                "foreground": "#FFD700"
-              }
+      "editor.tokenColorCustomizations": {
+        "textMateRules": [
+          {
+            "scope": [
+              "keyword.control.slopinclude",
+              "keyword.control.slopheap"
+            ],
+            "settings": {
+              "foreground": "#FFD700"
             }
-          ]
-        }
+          }
+        ]
       }
     },
     "languages": [
