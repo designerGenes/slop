@@ -18,19 +18,19 @@
       "patterns": [
         {
           "match": "^(\\s*)(\\\\/)(?:\\s+.*)?$",
-          "name": "string.quoted.other.slopheap",
+          "name": "keyword.control.slopheap",
           "captures": {
             "2": {
-              "name": "string.quoted.other.slopheap"
+              "name": "keyword.control.slopheap"
             }
           }
         },
         {
           "match": "^(\\s*)(/\\\\)\\s*$",
-          "name": "string.quoted.other.slopheap",
+          "name": "keyword.control.slopheap",
           "captures": {
             "2": {
-              "name": "string.quoted.other.slopheap"
+              "name": "keyword.control.slopheap"
             }
           }
         }

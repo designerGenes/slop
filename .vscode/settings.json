@@ -3,7 +3,10 @@
     "editor.tokenColorCustomizations": {
       "textMateRules": [
         {
-          "scope": "keyword.control.slopinclude",
+          "scope": [
+            "keyword.control.slopinclude",
+            "keyword.control.slopheap"
+          ],
           "settings": {
             "foreground": "#FFD700"
           }
