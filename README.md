@@ -350,7 +350,9 @@ top_k: 8               # max files from selection
 
 ### 16. Scan for secrets before uploading
 
-The secrets scanner runs automatically before serialization. Pattern-rule hits (private keys, AWS/Google/Twilio/Stripe/Slack/GitHub tokens, JWTs, bearer tokens) are **blocking**. High-entropy string hits are **warnings**.
+The secrets scanner runs automatically before serialization. Pattern-rule hits (private keys, AWS/Google/Twilio/Stripe/Slack/GitHub tokens, JWTs, bearer tokens) are **blocking**. High-entropy string hits are **warnings**. Repeated findings are summarized — one `file: rule ×N (first at line L)` entry per file, not one line per hit.
+
+Content digests are never treated as secrets: `sha512-…`/`sha256-…` integrity hashes are skipped in any file, and dependency lockfiles (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.lock`, `go.sum`, …) are exempt from the high-entropy heuristic entirely — their integrity checksums are not credentials. Blocking pattern rules still apply inside lockfiles.
 
 Override an individual line that is a known false positive:
 

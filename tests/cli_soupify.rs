@@ -2,6 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use assert_cmd::Command;
+use predicates::prelude::PredicateBooleanExt;
 use tempfile::tempdir;
 
 fn cargo_bin() -> Command {
@@ -36,6 +37,39 @@ fn slopifies_one_file() {
     let slop = fs::read_to_string(output_dir.join("file1.md")).expect("slop file should exist");
     assert!(slop.contains("#SLOP"));
     assert!(slop.contains(input.to_string_lossy().as_ref()));
+}
+
+#[test]
+fn package_lock_integrity_hashes_do_not_produce_secret_warnings() {
+    let temp = tempdir().expect("tempdir should exist");
+    let root = temp.path().join("project");
+    fs::create_dir_all(&root).expect("project dir should be created");
+    let output_dir = temp.path().join("out");
+    fs::write(
+        root.join("package-lock.json"),
+        concat!(
+            "{\n",
+            "  \"packages\": {\n",
+            "    \"\": {\n",
+            "      \"integrity\": \"sha512-aB3xK9mN2pQr7sT4vUwXyZ0aBcDeFgHiJkLmNoPqRsTuVwXyZ0aBcDeFgHiJkLmNoPq\"\n",
+            "    },\n",
+            "    \"node_modules/left-pad\": {\n",
+            "      \"integrity\": \"sha512-kJ9mN2pQr7sT4vUwXyZ0aBcDeFgHiJkLmNoPqRsTuVwXyZ0aBcDeFgHiJkLmNoPqAb3\"\n",
+            "    }\n",
+            "  }\n",
+            "}\n",
+        ),
+    )
+    .expect("lockfile should be written");
+
+    cargo_bin()
+        .current_dir(&root)
+        .arg(".")
+        .arg("-o")
+        .arg(&output_dir)
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("high_entropy").not());
 }
 
 #[test]

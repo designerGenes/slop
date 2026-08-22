@@ -96,6 +96,40 @@ fn is_sensitive_filename(path: &Path) -> bool {
         || lower.ends_with(".keystore")
 }
 
+/// npm/Subresource-Integrity style content digests (`sha512-<base64>`, and
+/// friends). These are checksums, never credentials, no matter which file
+/// they appear in.
+fn is_content_digest(token: &str) -> bool {
+    const DIGEST_PREFIXES: &[&str] = &["sha1-", "sha256-", "sha384-", "sha512-", "sha512/", "md5-"];
+    DIGEST_PREFIXES.iter().any(|prefix| token.starts_with(prefix))
+}
+
+/// Machine-generated dependency lockfiles consist almost entirely of registry
+/// content digests that look like high-entropy secrets but never are. The
+/// high-entropy heuristic is skipped for them; concrete pattern rules (private
+/// keys, provider tokens, ...) still apply.
+fn is_dependency_lockfile(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    matches!(
+        name.to_lowercase().as_str(),
+        "package-lock.json"
+            | "npm-shrinkwrap.json"
+            | "yarn.lock"
+            | "pnpm-lock.yaml"
+            | "bun.lockb"
+            | "bun.lock"
+            | "cargo.lock"
+            | "poetry.lock"
+            | "pipfile.lock"
+            | "uv.lock"
+            | "gemfile.lock"
+            | "composer.lock"
+            | "go.sum"
+            | "flake.lock"
+            | "deno.lock"
+    )
+}
+
 fn shannon_entropy(s: &str) -> f64 {
     if s.is_empty() {
         return 0.0;
@@ -172,6 +206,8 @@ pub fn scan_files(files: &[SourceFile]) -> Vec<Finding> {
             });
         }
 
+        let skip_entropy = is_dependency_lockfile(Path::new(&file.original_absolute_path));
+
         for (i, line) in file.contents.lines().enumerate() {
             if is_suppressed(line) {
                 continue;
@@ -189,7 +225,14 @@ pub fn scan_files(files: &[SourceFile]) -> Vec<Finding> {
                 }
             }
 
+            if skip_entropy {
+                continue;
+            }
+
             for token in line.split(|c: char| c.is_whitespace() || c == '=' || c == '"' || c == '\'') {
+                if is_content_digest(token) {
+                    continue;
+                }
                 if !looks_like_secret_token(token) {
                     continue;
                 }
@@ -248,6 +291,47 @@ pub fn apply_redaction(files: &mut [SourceFile], findings: &[Finding]) {
     }
 }
 
+/// Render findings as one concise entry per (file, rule) group so a file with
+/// dozens of hits produces one line instead of a wall of text. The first
+/// occurrence's line number is kept; later ones collapse into a count.
+pub fn findings_summary(findings: &[Finding]) -> String {
+    let mut groups: Vec<(String, String, Severity, usize, usize, String)> = Vec::new();
+    for finding in findings {
+        if let Some(group) = groups
+            .iter_mut()
+            .find(|group| group.0 == finding.file && group.1 == finding.rule)
+        {
+            group.3 += 1;
+        } else {
+            groups.push((
+                finding.file.clone(),
+                finding.rule.clone(),
+                finding.severity.clone(),
+                1,
+                finding.line,
+                finding.masked_value.clone(),
+            ));
+        }
+    }
+
+    groups
+        .into_iter()
+        .map(|(file, rule, severity, count, first_line, mask)| {
+            let severity = if severity == Severity::Block {
+                "BLOCK"
+            } else {
+                "WARN"
+            };
+            if count == 1 {
+                format!("{file}:{first_line} {rule} [{severity}] {mask}")
+            } else {
+                format!("{file}: {rule} [{severity}] ×{count} (first at line {first_line}) {mask}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 pub fn enforce(
     files: &[SourceFile],
     config: &crate::config::Config,
@@ -271,11 +355,7 @@ pub fn enforce(
     let has_block = findings.iter().any(|f| f.severity == Severity::Block);
     let _has_warn = findings.iter().any(|f| f.severity == Severity::Warn);
 
-    let summary = findings
-        .iter()
-        .map(|f| format!("{}:{} {} [{}] {}", f.file, f.line, f.rule, if f.severity == Severity::Block { "BLOCK" } else { "WARN" }, f.masked_value))
-        .collect::<Vec<_>>()
-        .join("; ");
+    let summary = findings_summary(&findings);
 
     if allow_secrets {
         eprintln!("warning: secrets detected but --allow-secrets bypasses: {}", summary);
@@ -383,6 +463,55 @@ mod tests {
         let findings = high_entropy_findings(&[source_file("Cargo.lock", src)]);
 
         assert!(findings.is_empty(), "findings: {:?}", findings);
+    }
+
+    #[test]
+    fn scan_files_does_not_flag_package_lock_integrity_hashes() {
+        let src = "{\n\
+                   \t\"integrity\": \"sha512-aB3xK9mN2pQr7sT4vUwXyZ0aBcDeFgHiJkLmNoPqRsTuVwXyZ0aBcDeFgHiJkLmNoPq\",\n\
+                   \t\"integrity\": \"sha512-kJ9mN2pQr7sT4vUwXyZ0aBcDeFgHiJkLmNoPqRsTuVwXyZ0aBcDeFgHiJkLmNoPqAb3\",\n\
+                   \t\"resolved\": \"https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz\"\n\
+                   }\n";
+        let findings = high_entropy_findings(&[source_file("package-lock.json", src)]);
+
+        assert!(findings.is_empty(), "findings: {:?}", findings);
+    }
+
+    #[test]
+    fn high_entropy_skipped_for_lockfiles_but_pattern_rules_still_apply() {
+        let src = "yarn lockfile v1\n\
+                   checksum aB3xK9mN2pQr7sT4vUwXyZ0aBcDeFgHiJkLmNoPqRsTuVwXyZ0aBcDeFg\n\
+                   AWS_ACCESS_KEY_ID=AKIA1234567890123456\n";
+        let findings = scan_files(&[source_file("yarn.lock", src)]);
+
+        assert!(findings
+            .iter()
+            .all(|f| f.rule != "high_entropy"));
+        assert!(findings
+            .iter()
+            .any(|f| f.rule == "aws_access_key_id"));
+    }
+
+    #[test]
+    fn content_digest_prefixes_never_flagged_as_high_entropy() {
+        let src = "let expected = \"sha512-aB3xK9mN2pQr7sT4vUwXyZ0aBcDeFgHiJkLmNoPqRsTuVwXyZ0aBcDeFgHiJkLmNoPq\";\n";
+        let findings = high_entropy_findings(&[source_file("main.swift", src)]);
+
+        assert!(findings.is_empty(), "findings: {:?}", findings);
+    }
+
+    #[test]
+    fn findings_summary_groups_repeated_hits_into_one_entry() {
+        let src = "let a = \"aB3xK9mN2pQr7sT4vUwXyZ0aBcDeFgHi\";\n\
+                   let b = \"aB3xK9mN2pQr7sT4vUwXyZ0aBcDeFgHi\";\n\
+                   let c = \"aB3xK9mN2pQr7sT4vUwXyZ0aBcDeFgHi\";\n";
+        let findings = scan_files(&[source_file("main.rs", src)]);
+        let summary = super::findings_summary(&findings);
+
+        assert_eq!(
+            summary,
+            "main.rs: high_entropy [WARN] ×3 (first at line 1) «REDACTED:aB3x...»"
+        );
     }
 
     #[test]
