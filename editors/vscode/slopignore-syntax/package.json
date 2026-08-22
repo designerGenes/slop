@@ -2,7 +2,7 @@
   "name": "slopignore-syntax",
   "displayName": "SlopIgnore Syntax",
   "description": "Syntax highlighting for SlopIgnore and SlopHeap directives.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "slop",
   "engines": {
     "vscode": "^1.85.0"
