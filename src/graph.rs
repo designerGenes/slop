@@ -6,6 +6,15 @@ use crate::error::SlopError;
 use crate::models::SoupMetaBlock;
 use crate::repomap;
 
+/// Body formats slop can actually render.
+///
+/// `--graph-format` used to be copied straight into `#SLOP_META_FORMAT` while
+/// the body was always rendered as a repomap, so `--graph-format dot` shipped a
+/// block advertising DOT that contained no DOT at all. Validating here keeps
+/// the header honest about its payload; adding a format means adding a renderer
+/// and an entry to this list together.
+const SUPPORTED_GRAPH_FORMATS: &[&str] = &["repomap"];
+
 pub fn find_git_root(start: &Path) -> Option<PathBuf> {
     let output = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
@@ -43,19 +52,29 @@ pub fn shared_git_root(files: &[PathBuf]) -> Option<PathBuf> {
     Some(root)
 }
 
+pub fn normalize_graph_format(requested: &str) -> Result<String, SlopError> {
+    let format = requested.trim().to_lowercase();
+    if SUPPORTED_GRAPH_FORMATS.contains(&format.as_str()) {
+        Ok(format)
+    } else {
+        Err(SlopError::RepoMapGenerationFailure(format!(
+            "unsupported graph format {requested:?}; supported formats: {}",
+            SUPPORTED_GRAPH_FORMATS.join(", ")
+        )))
+    }
+}
+
 pub fn generate_repomap(
     repo_root: &Path,
     seed_files: &[PathBuf],
     config: &Config,
 ) -> Result<SoupMetaBlock, SlopError> {
+    let format = normalize_graph_format(&config.graph_format)?;
     let map_tokens = config.graph_map_tokens;
 
-    let body = repomap::generate_repomap(repo_root, seed_files, map_tokens)
-        .ok_or_else(|| {
-            SlopError::RepoMapGenerationFailure(
-                "no repository map could be generated".to_string(),
-            )
-        })?;
+    let body = repomap::generate_repomap(repo_root, seed_files, map_tokens).ok_or_else(|| {
+        SlopError::RepoMapGenerationFailure("no repository map could be generated".to_string())
+    })?;
 
     let content_lines: Vec<String> = if body.is_empty() {
         Vec::new()
@@ -68,7 +87,7 @@ pub fn generate_repomap(
     Ok(SoupMetaBlock {
         label: "repo-graph".to_string(),
         kind: "codegraph".to_string(),
-        format: config.graph_format.clone(),
+        format,
         line_count,
         readonly: true,
         content_lines,
@@ -124,5 +143,28 @@ mod tests {
         let mut config = Config::default();
         config.include_graph = true;
         assert!(should_include_graph(false, &config));
+    }
+
+    #[test]
+    fn accepts_the_supported_format_case_insensitively() {
+        assert_eq!(normalize_graph_format("repomap").expect("ok"), "repomap");
+        assert_eq!(normalize_graph_format("  RepoMap ").expect("ok"), "repomap");
+    }
+
+    #[test]
+    fn rejects_a_format_it_cannot_actually_render() {
+        // Regression: `--graph-format dot` used to be accepted silently and
+        // stamped onto a repomap-formatted body.
+        let error = normalize_graph_format("dot").expect_err("dot is not implemented");
+        assert!(error.to_string().contains("unsupported graph format"));
+    }
+
+    #[test]
+    fn generate_repomap_surfaces_the_format_error() {
+        let temp = tempdir().expect("tempdir");
+        let mut config = Config::default();
+        config.graph_format = "dot".to_string();
+        let result = generate_repomap(temp.path(), &[], &config);
+        assert!(result.is_err());
     }
 }
