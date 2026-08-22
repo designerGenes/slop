@@ -25,6 +25,8 @@ use std::path::{Path, PathBuf};
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
+use crate::models::CliArgs;
+
 pub const SLOPIGNORE_FILE_NAME: &str = ".slopignore";
 
 /// A compiled `.slopignore` matcher. An "empty" matcher (no `.slopignore`
@@ -37,6 +39,7 @@ pub struct SlopIgnore {
     has_explicit_slopignore_include: bool,
     source: Option<PathBuf>,
     heaps: Vec<SlopHeap>,
+    option_error: Option<String>,
 }
 
 /// A separately rooted group of `.slopignore` rules. Heap ignore patterns are
@@ -47,6 +50,8 @@ pub struct SlopHeap {
     include_matcher: Option<Gitignore>,
     explicit_includes: Vec<PathBuf>,
     has_explicit_slopignore_include: bool,
+    args: CliArgs,
+    ignore_patterns: Vec<String>,
 }
 
 struct HeapBuilder {
@@ -56,6 +61,7 @@ struct HeapBuilder {
     has_local_includes: bool,
     has_explicit_slopignore_include: bool,
     explicit_includes: Vec<PathBuf>,
+    ignore_patterns: Vec<String>,
 }
 
 impl SlopIgnore {
@@ -67,6 +73,7 @@ impl SlopIgnore {
             has_explicit_slopignore_include: false,
             source: None,
             heaps: Vec::new(),
+            option_error: None,
         }
     }
 
@@ -113,7 +120,7 @@ impl SlopIgnore {
                     return Self::empty();
                 }
                 heap_stack.push(HeapBuilder::new(crate::pathing::normalize_path(&path)));
-            } else if trimmed == r"/\" {
+            } else if let Some(options) = heap_close_options(trimmed) {
                 let Some(heap) = heap_stack.pop() else {
                     eprintln!(
                         "warning: slopheap close without an opening directive in {}; continuing without it",
@@ -121,7 +128,18 @@ impl SlopIgnore {
                     );
                     return Self::empty();
                 };
-                match heap.build(&source) {
+                let args = match crate::cli::parse_slopheap_options(options, &heap.root) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        let message = format!(
+                            "could not parse slopheap options in {}: {error}",
+                            source.display()
+                        );
+                        eprintln!("warning: {message}");
+                        return Self::with_option_error(message);
+                    }
+                };
+                match heap.build(&source, args) {
                     Ok(heap) => heaps.push(heap),
                     Err(error) => {
                         eprintln!("warning: {error}; continuing without it");
@@ -206,6 +224,7 @@ impl SlopIgnore {
             has_explicit_slopignore_include,
             source: Some(source),
             heaps,
+            option_error: None,
         }
     }
 
@@ -268,6 +287,16 @@ impl SlopIgnore {
     pub fn heaps(&self) -> &[SlopHeap] {
         &self.heaps
     }
+
+    pub fn option_error(&self) -> Option<&str> {
+        self.option_error.as_deref()
+    }
+
+    fn with_option_error(error: String) -> Self {
+        let mut ignore = Self::empty();
+        ignore.option_error = Some(error);
+        ignore
+    }
 }
 
 impl HeapBuilder {
@@ -279,6 +308,7 @@ impl HeapBuilder {
             has_local_includes: false,
             has_explicit_slopignore_include: false,
             explicit_includes: Vec::new(),
+            ignore_patterns: Vec::new(),
         }
     }
 
@@ -316,11 +346,12 @@ impl HeapBuilder {
                         source.display()
                     )
                 })?;
+            self.ignore_patterns.push(line.trim_start().to_string());
         }
         Ok(())
     }
 
-    fn build(self, source: &Path) -> Result<SlopHeap, String> {
+    fn build(self, source: &Path, args: CliArgs) -> Result<SlopHeap, String> {
         let matcher = self.ignore_builder.build().map_err(|error| {
             format!(
                 "could not compile slopheap in {}: {error}",
@@ -342,11 +373,25 @@ impl HeapBuilder {
             include_matcher,
             explicit_includes: self.explicit_includes,
             has_explicit_slopignore_include: self.has_explicit_slopignore_include,
+            args,
+            ignore_patterns: self.ignore_patterns,
         })
     }
 }
 
 impl SlopHeap {
+    pub fn root(&self) -> &Path {
+        self.matcher.path()
+    }
+
+    pub fn args(&self) -> &CliArgs {
+        &self.args
+    }
+
+    pub fn ignore_patterns(&self) -> &[String] {
+        &self.ignore_patterns
+    }
+
     pub fn is_ignored(&self, path: &Path, is_dir: bool) -> bool {
         let relative = path.strip_prefix(self.matcher.path()).unwrap_or(path);
         self.matcher.matched(relative, is_dir).is_ignore()
@@ -373,6 +418,19 @@ impl SlopHeap {
     pub fn is_explicit_slopignore_included(&self, path: &Path) -> bool {
         self.explicit_includes.contains(&path.to_path_buf()) || self.has_explicit_slopignore_include
     }
+}
+
+/// Match a bare heap close or one followed by whitespace-separated CLI
+/// options. A path-like ignore pattern beginning with `/\` remains a pattern.
+fn heap_close_options(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix(r"/\")?;
+    if rest.is_empty() {
+        return Some(rest);
+    }
+    rest.chars()
+        .next()
+        .is_some_and(char::is_whitespace)
+        .then_some(rest.trim())
 }
 
 /// Extract the pattern from either supported include-directive spelling.
@@ -522,6 +580,30 @@ mod tests {
         let heap = ignore.heaps().first().expect("heap should be parsed");
         assert!(heap.is_included(&heap_root.join("src/keep.rs"), false));
         assert!(heap.is_ignored(&heap_root.join("src/excluded.rs"), false));
+    }
+
+    #[test]
+    fn heap_close_parses_standard_cli_options() {
+        let temp = tempdir().expect("tempdir");
+        let pocket = temp.path().join("pocket");
+        let heap_root = temp.path().join("heap");
+        fs::create_dir_all(&heap_root).expect("heap root");
+        fs::create_dir_all(&pocket).expect("pocket");
+        fs::write(
+            pocket.join(SLOPIGNORE_FILE_NAME),
+            format!(
+                "\\/ {}\n+ src/\n/\\ -g --graph-map-tokens 512 -x '*.tmp'\n",
+                heap_root.display()
+            ),
+        )
+        .expect("slopignore");
+
+        let ignore = SlopIgnore::discover(&pocket);
+        let heap = ignore.heaps().first().expect("heap should be parsed");
+        assert_eq!(heap.root(), heap_root);
+        assert!(heap.args().include_graph);
+        assert_eq!(heap.args().graph_map_tokens, Some(512));
+        assert_eq!(heap.args().exclude, vec!["*.tmp"]);
     }
 
     #[test]

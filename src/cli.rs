@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::error::ErrorKind;
 use clap::Parser;
@@ -106,7 +106,77 @@ where
         ));
     }
 
-    Ok(CliArgs {
+    Ok(cli_args_from_raw(parsed))
+}
+
+/// Parse options attached to a slopheap closing directive with the exact same
+/// Clap definition as the top-level command. The heap root supplies the
+/// positional input that a normal slop invocation requires.
+pub(crate) fn parse_slopheap_options(options: &str, root: &Path) -> Result<CliArgs, SlopError> {
+    let tokens = shell_words::split(options).map_err(|error| {
+        SlopError::InvalidCliUsage(format!("invalid slopheap options: {error}"))
+    })?;
+    let mut args = Vec::with_capacity(tokens.len() + 2);
+    args.push(std::ffi::OsString::from("slop"));
+    args.extend(tokens.into_iter().map(std::ffi::OsString::from));
+    args.push(root.as_os_str().to_os_string());
+
+    let parsed = RawCliArgs::try_parse_from(args).map_err(|error| {
+        SlopError::InvalidCliUsage(format!("invalid slopheap options: {error}"))
+    })?;
+    let args = cli_args_from_raw(parsed);
+    validate_slopheap_options(&args)?;
+    Ok(args)
+}
+
+fn validate_slopheap_options(args: &CliArgs) -> Result<(), SlopError> {
+    let mut unsupported = Vec::new();
+    if args.deslop {
+        unsupported.push("--deslop");
+    }
+    if args.show_output_dir {
+        unsupported.push("--show");
+    }
+    if args.output_dir.is_some() {
+        unsupported.push("--output");
+    }
+    if args.ignore_slopignore {
+        unsupported.push("--ignore-slopignore");
+    }
+    if args.slop_to.is_some() {
+        unsupported.push("--slop-to");
+    }
+    if args.dry_run {
+        unsupported.push("--dry-run");
+    }
+    if !args.allow_roots.is_empty() {
+        unsupported.push("--allow-root");
+    }
+    if args.silent {
+        unsupported.push("--silent");
+    }
+    if args.verbose {
+        unsupported.push("--verbose");
+    }
+    if args.recursive {
+        unsupported.push("--recursive (slopheap includes are already recursive)");
+    }
+    if args.inputs.len() != 1 {
+        unsupported.push("positional inputs");
+    }
+
+    if unsupported.is_empty() {
+        Ok(())
+    } else {
+        Err(SlopError::InvalidCliUsage(format!(
+            "slopheap options cannot control the outer process: {}",
+            unsupported.join(", ")
+        )))
+    }
+}
+
+fn cli_args_from_raw(parsed: RawCliArgs) -> CliArgs {
+    CliArgs {
         deslop: parsed.deslop,
         show_output_dir: parsed.show_output_dir,
         output_dir: parsed.output_dir,
@@ -135,12 +205,12 @@ where
         context_files: parsed.context_files,
         silent: parsed.silent,
         verbose: parsed.verbose,
-    })
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_cli_args_from;
+    use super::{parse_cli_args_from, parse_slopheap_options};
 
     #[test]
     fn rejects_missing_inputs() {
@@ -231,5 +301,28 @@ mod tests {
             result.slop_to.as_deref(),
             Some(std::path::Path::new("/tmp/out"))
         );
+    }
+
+    #[test]
+    fn parses_quoted_slopheap_options_with_the_standard_cli_definition() {
+        let root = std::path::Path::new("/tmp/project");
+        let result = parse_slopheap_options(
+            "-g --graph-map-tokens 4096 --match 'login flow' -x '*.tmp'",
+            root,
+        )
+        .expect("heap options should parse");
+
+        assert!(result.include_graph);
+        assert_eq!(result.graph_map_tokens, Some(4096));
+        assert_eq!(result.matches, vec!["login flow"]);
+        assert_eq!(result.exclude, vec!["*.tmp"]);
+        assert_eq!(result.inputs, vec![root]);
+    }
+
+    #[test]
+    fn rejects_process_mode_options_in_slopheaps() {
+        let error = parse_slopheap_options("--dry-run", std::path::Path::new("/tmp/project"))
+            .expect_err("process mode should not be silently ignored");
+        assert!(error.to_string().contains("cannot control the outer process"));
     }
 }

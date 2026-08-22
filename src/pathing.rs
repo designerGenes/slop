@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 
 use crate::config::Config;
 use crate::error::SlopError;
-use crate::models::{IgnoreReason, IgnoredEntry, WalkReport};
+use crate::models::{IgnoreReason, IgnoredEntry, SlopHeapRequest, WalkReport};
 use crate::rules_manifest::{self, Depth, PathAction};
 use crate::slopignore::{SlopHeap, SlopIgnore};
 
@@ -46,11 +46,12 @@ pub fn should_respect_gitignore(args_respect_gitignore: bool, config: &Config) -
     args_respect_gitignore || config.respect_gitignore
 }
 
+#[derive(Clone)]
 pub struct ExclusionMatcher {
     patterns: Vec<ExclusionPattern>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum ExclusionPattern {
     Glob(String),   // File pattern like "*.swift"
     Folder(String), // Folder name like "folder2"
@@ -134,6 +135,14 @@ impl ExclusionMatcher {
             }
         }
         false
+    }
+
+    fn with_additional(&self, patterns: &[String]) -> Self {
+        let mut combined = self.clone();
+        combined
+            .patterns
+            .extend(patterns.iter().map(|pattern| Self::compile_pattern(pattern)));
+        combined
     }
 }
 
@@ -240,6 +249,7 @@ pub fn collect_source_files_reporting_with_slopignore(
     let mut files = Vec::new();
     let mut forced_seen = BTreeSet::new();
     let mut forced_files = Vec::new();
+    let mut slopheaps = Vec::new();
     let ignored: IgnoredSink = Arc::new(Mutex::new(Vec::new()));
     let exclusion_matcher = ExclusionMatcher::new(exclude);
 
@@ -249,10 +259,14 @@ pub fn collect_source_files_reporting_with_slopignore(
         // Discovered per input: two inputs can sit in different repos, each
         // with its own .slopignore.
         let slopignore = if skip_slopignore {
-            Arc::new(SlopIgnore::empty())
+            SlopIgnore::empty()
         } else {
-            Arc::new(SlopIgnore::discover(input))
+            SlopIgnore::discover(input)
         };
+        if let Some(error) = slopignore.option_error() {
+            return Err(SlopError::InvalidCliUsage(error.to_string()));
+        }
+        let slopignore = Arc::new(slopignore);
         collect_path(
             input,
             &mut seen,
@@ -272,6 +286,8 @@ pub fn collect_source_files_reporting_with_slopignore(
                 &mut forced_seen,
                 &mut forced_files,
                 &exclusion_matcher,
+                respect_gitignore,
+                &mut slopheaps,
             )?;
         }
     }
@@ -301,12 +317,14 @@ pub fn collect_source_files_reporting_with_slopignore(
         files,
         forced_files,
         ignored,
+        slopheaps,
     })
 }
 
 /// Add all files matched by the active `.slopignore`'s include directives.
 /// This runs separately from the ordinary walk so a matching file can be
 /// rescued from a pruned directory, shallow traversal, or `.gitignore`.
+#[allow(clippy::too_many_arguments)]
 fn collect_includes(
     slopignore: &SlopIgnore,
     seen: &mut BTreeSet<PathBuf>,
@@ -314,6 +332,8 @@ fn collect_includes(
     forced_seen: &mut BTreeSet<PathBuf>,
     forced_files: &mut Vec<PathBuf>,
     exclusion_matcher: &ExclusionMatcher,
+    respect_gitignore: bool,
+    slopheaps: &mut Vec<SlopHeapRequest>,
 ) -> Result<(), SlopError> {
     for path in slopignore.explicit_includes() {
         include_path(
@@ -327,14 +347,24 @@ fn collect_includes(
     }
 
     for heap in slopignore.heaps() {
-        collect_heap_includes(
+        let files = collect_heap_includes(
             heap,
             seen,
             files,
             forced_seen,
             forced_files,
             exclusion_matcher,
+            respect_gitignore || heap.args().respect_gitignore,
         )?;
+        let request = SlopHeapRequest {
+            root: heap.root().to_path_buf(),
+            args: heap.args().clone(),
+            files,
+            ignore_patterns: heap.ignore_patterns().to_vec(),
+        };
+        if !slopheaps.contains(&request) {
+            slopheaps.push(request);
+        }
     }
 
     let Some(root) = slopignore.include_root() else {
@@ -380,7 +410,10 @@ fn collect_heap_includes(
     forced_seen: &mut BTreeSet<PathBuf>,
     forced_files: &mut Vec<PathBuf>,
     exclusion_matcher: &ExclusionMatcher,
-) -> Result<(), SlopError> {
+    respect_gitignore: bool,
+) -> Result<Vec<PathBuf>, SlopError> {
+    let exclusion_matcher = exclusion_matcher.with_additional(&heap.args().exclude);
+    let mut heap_files = BTreeSet::new();
     for path in heap.explicit_includes() {
         include_heap_path(
             heap,
@@ -389,46 +422,36 @@ fn collect_heap_includes(
             files,
             forced_seen,
             forced_files,
-            exclusion_matcher,
+            &exclusion_matcher,
+            respect_gitignore,
+            &mut heap_files,
         )?;
     }
 
     let Some(root) = heap.include_root() else {
-        return Ok(());
+        return Ok(heap_files.into_iter().collect());
     };
-    for entry in WalkDir::new(root).follow_links(false) {
-        let entry = entry.map_err(|error| {
-            let path = error
-                .path()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| root.to_path_buf());
-            SlopError::FileReadFailure {
-                path,
-                source: std::io::Error::other(error.to_string()),
-            }
-        })?;
-        if entry.file_type().is_file()
-            && heap.is_included(entry.path(), false)
-            && !heap.is_ignored(entry.path(), false)
-        {
-            if is_slopignore_file(entry.path())
-                && !heap.is_explicit_slopignore_included(entry.path())
-            {
+    for path in heap_file_paths(root, respect_gitignore)? {
+        if heap.is_included(&path, false) && !heap.is_ignored(&path, false) {
+            if is_slopignore_file(&path) && !heap.is_explicit_slopignore_included(&path) {
                 continue;
             }
-            include_file(
-                entry.path(),
+            if let Some(path) = include_file(
+                &path,
                 seen,
                 files,
                 forced_seen,
                 forced_files,
-                exclusion_matcher,
-            )?;
+                &exclusion_matcher,
+            )? {
+                heap_files.insert(path);
+            }
         }
     }
-    Ok(())
+    Ok(heap_files.into_iter().collect())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn include_heap_path(
     heap: &SlopHeap,
     path: &Path,
@@ -437,6 +460,8 @@ fn include_heap_path(
     forced_seen: &mut BTreeSet<PathBuf>,
     forced_files: &mut Vec<PathBuf>,
     exclusion_matcher: &ExclusionMatcher,
+    respect_gitignore: bool,
+    heap_files: &mut BTreeSet<PathBuf>,
 ) -> Result<(), SlopError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -452,42 +477,133 @@ fn include_heap_path(
         return Ok(());
     }
     if !metadata.is_dir() {
-        if !heap.is_ignored(path, false) {
-            include_file(
+        if !heap.is_ignored(path, false)
+            && let Some(path) = include_file(
                 path,
                 seen,
                 files,
                 forced_seen,
                 forced_files,
                 exclusion_matcher,
-            )?;
+            )?
+        {
+            heap_files.insert(path);
         }
         return Ok(());
     }
 
-    for entry in WalkDir::new(path).follow_links(false) {
-        let entry = entry.map_err(|error| {
-            let path = error
-                .path()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| path.to_path_buf());
-            SlopError::FileReadFailure {
-                path,
-                source: std::io::Error::other(error.to_string()),
-            }
-        })?;
-        if entry.file_type().is_file() && !heap.is_ignored(entry.path(), false) {
-            include_file(
-                entry.path(),
+    for entry_path in heap_file_paths(path, respect_gitignore)? {
+        if !heap.is_ignored(&entry_path, false)
+            && let Some(path) = include_file(
+                &entry_path,
                 seen,
                 files,
                 forced_seen,
                 forced_files,
                 exclusion_matcher,
-            )?;
+            )?
+        {
+            heap_files.insert(path);
         }
     }
     Ok(())
+}
+
+fn heap_file_paths(root: &Path, respect_gitignore: bool) -> Result<Vec<PathBuf>, SlopError> {
+    if !respect_gitignore {
+        let mut paths = Vec::new();
+        for entry in WalkDir::new(root).follow_links(false) {
+            let entry = entry.map_err(|error| {
+                let path = error
+                    .path()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| root.to_path_buf());
+                SlopError::FileReadFailure {
+                    path,
+                    source: std::io::Error::other(error.to_string()),
+                }
+            })?;
+            if entry.file_type().is_file() {
+                paths.push(entry.into_path());
+            }
+        }
+        return Ok(paths);
+    }
+
+    let inside_git_repo = containing_git_root(root).is_some();
+    let mut builder = WalkBuilder::new(root);
+    builder
+        .follow_links(false)
+        .hidden(false)
+        .parents(inside_git_repo)
+        .ignore(false)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(false)
+        .require_git(inside_git_repo);
+
+    let mut paths = Vec::new();
+    for entry in builder.build() {
+        let entry = entry.map_err(|error| SlopError::FileReadFailure {
+            path: root.to_path_buf(),
+            source: std::io::Error::other(error.to_string()),
+        })?;
+        if entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_file())
+        {
+            paths.push(entry.into_path());
+        }
+    }
+    Ok(paths)
+}
+
+pub fn filter_slopheap_selection(
+    heap: &SlopHeapRequest,
+    paths: Vec<PathBuf>,
+    outer_exclude: &[String],
+    respect_gitignore: bool,
+) -> Result<Vec<PathBuf>, SlopError> {
+    let mut exclude = outer_exclude.to_vec();
+    exclude.extend(heap.args.exclude.iter().cloned());
+    let exclusion_matcher = ExclusionMatcher::new(&exclude);
+    let mut ignore_builder = ignore::gitignore::GitignoreBuilder::new(&heap.root);
+    let heap_source = heap.root.join(crate::slopignore::SLOPIGNORE_FILE_NAME);
+    for pattern in &heap.ignore_patterns {
+        ignore_builder
+            .add_line(Some(heap_source.clone()), pattern)
+            .map_err(|error| {
+                SlopError::InvalidCliUsage(format!(
+                    "could not compile slopheap rule for selection: {error}"
+                ))
+            })?;
+    }
+    let ignore_matcher = ignore_builder.build().map_err(|error| {
+        SlopError::InvalidCliUsage(format!(
+            "could not compile slopheap rules for selection: {error}"
+        ))
+    })?;
+    let gitignore_allowed = if respect_gitignore || heap.args.respect_gitignore {
+        Some(
+            heap_file_paths(&heap.root, true)?
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+        )
+    } else {
+        None
+    };
+
+    Ok(paths
+        .into_iter()
+        .filter(|path| {
+            let relative = path.strip_prefix(&heap.root).unwrap_or(path);
+            !exclusion_matcher.should_exclude(path)
+                && !ignore_matcher.matched(relative, false).is_ignore()
+                && gitignore_allowed
+                    .as_ref()
+                    .is_none_or(|allowed| allowed.contains(path))
+        })
+        .collect())
 }
 
 fn include_path(
@@ -519,7 +635,8 @@ fn include_path(
             forced_seen,
             forced_files,
             exclusion_matcher,
-        );
+        )
+        .map(|_| ());
     }
 
     for entry in WalkDir::new(path).follow_links(false) {
@@ -554,10 +671,10 @@ fn include_file(
     forced_seen: &mut BTreeSet<PathBuf>,
     forced_files: &mut Vec<PathBuf>,
     exclusion_matcher: &ExclusionMatcher,
-) -> Result<(), SlopError> {
+) -> Result<Option<PathBuf>, SlopError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(SlopError::FileReadFailure {
                 path: path.to_path_buf(),
@@ -566,14 +683,14 @@ fn include_file(
         }
     };
     if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Ok(());
+        return Ok(None);
     }
     if !rules_manifest::selects_slopinclude(exclusion_matcher.should_exclude(path)) {
-        return Ok(());
+        return Ok(None);
     }
     if !is_plaintext(path) && rules_manifest::skips(PathAction::NonText) {
         eprintln!("warning: skipping non-text file: {}", path.display());
-        return Ok(());
+        return Ok(None);
     }
 
     let path = equivalent_seen_path(seen, path)
@@ -583,9 +700,9 @@ fn include_file(
         forced_files.push(path.clone());
     }
     if insert_unique_path(seen, &path) {
-        files.push(path);
+        files.push(path.clone());
     }
-    Ok(())
+    Ok(Some(path))
 }
 
 /// Insert a path unless a different spelling already refers to the same file.

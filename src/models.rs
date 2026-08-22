@@ -59,6 +59,17 @@ pub struct WalkReport {
     /// these after their own result so the directive remains authoritative.
     pub forced_files: Vec<PathBuf>,
     pub ignored: Vec<IgnoredEntry>,
+    /// Heap roots and their CLI-style options, retained so later slop stages
+    /// can apply selection, context, and graph behavior to the correct root.
+    pub slopheaps: Vec<SlopHeapRequest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlopHeapRequest {
+    pub root: PathBuf,
+    pub args: CliArgs,
+    pub files: Vec<PathBuf>,
+    pub ignore_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -595,6 +595,219 @@ fn slopheaps_include_other_roots_with_local_exclusions_and_nesting() {
     assert!(!slop.contains("heap-unselected-marker"));
 }
 
+#[test]
+fn slopheap_options_apply_to_the_targeted_root() {
+    let temp = tempdir().expect("tempdir should exist");
+    let home = temp.path().join("home");
+    let pocket = temp.path().join("pocket");
+    let heap = temp.path().join("project");
+    let output_dir = temp.path().join("out");
+
+    fs::create_dir_all(&pocket).expect("pocket should exist");
+    fs::create_dir_all(heap.join("src")).expect("heap source dir should exist");
+    fs::create_dir_all(heap.join("lib")).expect("heap library dir should exist");
+    fs::write(
+        heap.join("src/seed.rs"),
+        "pub fn use_helper() { helper(); }\n",
+    )
+    .expect("seed source file");
+    fs::write(
+        heap.join("src/excluded.rs"),
+        "pub fn excluded_marker() {}\n",
+    )
+    .expect("excluded source file");
+    fs::write(heap.join("lib/helper.rs"), "pub fn helper() {}\n")
+        .expect("graph-only source file");
+    fs::write(heap.join("CONTEXT.md"), "heap-context-marker\n")
+        .expect("context file");
+    fs::write(
+        heap.join("src/secret.txt"),
+        "AWS_ACCESS_KEY_ID=AKIA1234567890123456\n",
+    )
+    .expect("secret fixture");
+    fs::write(heap.join("src/gitignored.rs"), "pub fn gitignored() {}\n")
+        .expect("gitignored fixture");
+    fs::write(heap.join(".gitignore"), "src/gitignored.rs\n").expect("heap gitignore");
+    fs::write(
+        pocket.join(".slopignore"),
+        format!(
+            "*\n\\/ {}\n  + src/\n  + CONTEXT.md\n/\\ -g --graph-map-tokens 4096 -x excluded.rs --context-file CONTEXT.md --redact --respect-gitignore --seed src/gitignored.rs\n",
+            heap.display()
+        ),
+    )
+    .expect("slopignore should be written");
+
+    cargo_bin(&home)
+        .current_dir(&pocket)
+        .args(["-r", "-o"])
+        .arg(&output_dir)
+        .arg(".")
+        .assert()
+        .success();
+
+    let slop = read_only_slop(&output_dir);
+    let document = slop::slop_format::parse_document(&slop).expect("generated slop should parse");
+    assert_eq!(document.meta_blocks.len(), 1);
+    assert_eq!(document.meta_blocks[0].label, "repo-graph");
+    assert!(
+        document.meta_blocks[0]
+            .content_lines
+            .iter()
+            .any(|line| line.contains("lib/helper.rs")),
+        "the graph must be generated from the heap root rather than the pocket"
+    );
+    assert!(slop.contains("use_helper"));
+    assert!(
+        document
+            .blocks
+            .iter()
+            .all(|block| block.original_absolute_path != heap.join("src/excluded.rs")),
+        "heap -x options must exclude matching source blocks"
+    );
+    assert!(
+        document
+            .blocks
+            .iter()
+            .all(|block| block.original_absolute_path != heap.join("src/gitignored.rs")),
+        "heap --respect-gitignore must prune matching source blocks"
+    );
+    let context = document
+        .blocks
+        .iter()
+        .find(|block| block.original_absolute_path == heap.join("CONTEXT.md"))
+        .expect("heap-relative context file should be present");
+    assert!(context.read_only);
+    let secret = document
+        .blocks
+        .iter()
+        .find(|block| block.original_absolute_path == heap.join("src/secret.txt"))
+        .expect("heap secret file should be present");
+    assert!(secret.read_only);
+    assert!(secret.content_lines.iter().any(|line| line.contains("REDACTED")));
+    assert!(
+        secret
+            .content_lines
+            .iter()
+            .all(|line| !line.contains("AKIA1234567890123456"))
+    );
+}
+
+#[test]
+fn invalid_slopheap_options_fail_instead_of_disabling_slopignore() {
+    let temp = tempdir().expect("tempdir should exist");
+    let home = temp.path().join("home");
+    let pocket = temp.path().join("pocket");
+    let heap = temp.path().join("project");
+    fs::create_dir_all(&pocket).expect("pocket should exist");
+    fs::create_dir_all(&heap).expect("heap should exist");
+    fs::write(pocket.join("private.txt"), "must-not-leak").expect("private file");
+    fs::write(
+        pocket.join(".slopignore"),
+        format!("*\n\\/ {}\n  + src/\n/\\ --include-grph\n", heap.display()),
+    )
+    .expect("slopignore should be written");
+
+    cargo_bin(&home)
+        .current_dir(&pocket)
+        .arg(".")
+        .assert()
+        .failure()
+        .stderr(contains("could not parse slopheap options"))
+        .stderr(contains("--include-grph"));
+}
+
+#[test]
+fn outer_and_slopheap_selection_options_compose() {
+    let temp = tempdir().expect("tempdir should exist");
+    let home = temp.path().join("home");
+    let pocket = temp.path().join("pocket");
+    let heap = temp.path().join("project");
+    let output_dir = temp.path().join("out");
+    fs::create_dir_all(&pocket).expect("pocket should exist");
+    fs::create_dir_all(&heap).expect("heap should exist");
+    fs::write(pocket.join("outer.rs"), "pub fn outer_selected() {}\n").expect("outer seed");
+    fs::write(heap.join("base.rs"), "pub fn heap_base() {}\n").expect("heap base");
+    fs::write(heap.join("selected.rs"), "pub fn heap_selected() {}\n").expect("heap seed");
+    fs::write(heap.join("excluded.rs"), "pub fn heap_excluded() {}\n").expect("excluded seed");
+    fs::write(heap.join("ignored.rs"), "pub fn heap_ignored() {}\n").expect("ignored seed");
+    fs::write(
+        heap.join("outer-excluded.rs"),
+        "pub fn outer_excluded() {}\n",
+    )
+    .expect("outer excluded seed");
+    fs::write(
+        heap.join("gitignored.rs"),
+        "pub fn outer_gitignored() {}\n",
+    )
+    .expect("outer gitignored seed");
+    fs::write(heap.join(".gitignore"), "gitignored.rs\n").expect("heap gitignore");
+    fs::write(
+        pocket.join(".slopignore"),
+        format!(
+            "*\n\\/ {}\n  + base.rs\n  ignored.rs\n/\\ --seed selected.rs --seed excluded.rs --seed ignored.rs --seed outer-excluded.rs --seed gitignored.rs -x excluded.rs\n",
+            heap.display()
+        ),
+    )
+    .expect("slopignore should be written");
+
+    cargo_bin(&home)
+        .current_dir(&pocket)
+        .args([
+            "--seed",
+            "outer.rs",
+            "--respect-gitignore",
+            "-x",
+            "outer-excluded.rs",
+            "-o",
+        ])
+        .arg(&output_dir)
+        .arg(".")
+        .assert()
+        .success();
+
+    let slop = read_only_slop(&output_dir);
+    assert!(slop.contains("outer_selected"));
+    assert!(slop.contains("heap_selected"));
+    assert!(slop.contains("heap_base"));
+    assert!(!slop.contains("heap_excluded"));
+    assert!(!slop.contains("heap_ignored"));
+    assert!(!slop.contains("outer_excluded"));
+    assert!(!slop.contains("outer_gitignored"));
+}
+
+#[test]
+fn repeated_slopheaps_keep_their_own_file_sets() {
+    let temp = tempdir().expect("tempdir should exist");
+    let pocket = temp.path().join("pocket");
+    let heap = temp.path().join("project");
+    fs::create_dir_all(&pocket).expect("pocket should exist");
+    fs::create_dir_all(&heap).expect("heap should exist");
+    let first = heap.join("first.rs");
+    let second = heap.join("second.rs");
+    fs::write(&first, "pub fn first() {}\n").expect("first heap file");
+    fs::write(&second, "pub fn second() {}\n").expect("second heap file");
+    fs::write(
+        pocket.join(".slopignore"),
+        format!(
+            "*\n\\/ {}\n  + first.rs\n/\\ -g\n\\/ {}\n  + second.rs\n/\\ --redact\n",
+            heap.display(),
+            heap.display()
+        ),
+    )
+    .expect("slopignore should be written");
+
+    let report = slop::pathing::collect_source_files_reporting(
+        std::slice::from_ref(&pocket),
+        Some(usize::MAX),
+        &[],
+        false,
+    )
+    .expect("heap files should collect");
+    assert_eq!(report.slopheaps.len(), 2);
+    assert_eq!(report.slopheaps[0].files, vec![first]);
+    assert_eq!(report.slopheaps[1].files, vec![second]);
+}
+
 fn read_only_slop(output_dir: &Path) -> String {
     let entry = fs::read_dir(output_dir)
         .expect("output dir should exist")

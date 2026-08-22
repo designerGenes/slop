@@ -111,6 +111,26 @@ Use a `slopheap` block when its rules should be rooted in another absolute direc
 /\
 ```
 
+Put CLI options after a heap's closing `/\` to apply them to that heap. The
+options use the same parser as the `slop` command, including quoted values and
+repeatable flags. For example, this includes `src/`, excludes generated files,
+adds a read-only context file relative to the heap root, and generates a graph
+of the other project rather than the directory where `slop` was launched:
+
+```text
+\/ /absolute/path/to/other-project
+  + src/
+/\ -g -x '*.generated.rs' --context-file docs/architecture.md
+```
+
+Collection options such as `-x` and `--respect-gitignore`, selection options
+such as `--match`, `--seed`, `--symbol`, and `--task`, graph options, and
+`--context-file` are scoped to the heap's absolute root. Secret controls such
+as `--redact` and `--allow-secrets` are applied only to files beneath that
+root. Process and output controls such as `--deslop`, `--output`, and
+`--dry-run` cannot be scoped to one block and are rejected with a CLI error
+instead of being silently ignored.
+
 The VS Code `.slopignore` extension highlights both `\/` and `/\` directives in light yellow.
 
 The complete selection precedence is defined in [`resources/slop-rules.manifest`](resources/slop-rules.manifest), an executable, commentable DSL embedded in the binary. It defines every path-collection action and its priority, including direct files, `-x`, `.slopignore`, `.gitignore`, `slopinclude`, safety skips, duplicate handling, and traversal modes. A path's highest-priority matching action wins: `-x` overrides direct paths and include directives; include directives override `.slopignore` and `.gitignore`; and `.slopignore` overrides an active `.gitignore`. The `.gitignore` rule is active only with `--respect-gitignore` or `respect_gitignore: true`; it has no effect otherwise. A missing `.slopignore` means `slop .` performs its normal shallow walk, not a recursive or include-directed walk.

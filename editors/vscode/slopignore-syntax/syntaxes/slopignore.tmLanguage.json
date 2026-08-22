@@ -26,7 +26,7 @@
           }
         },
         {
-          "match": "^(\\s*)(/\\\\)\\s*$",
+          "match": "^(\\s*)(/\\\\)(?:\\s+.*)?$",
           "name": "keyword.control.slopinclude",
           "captures": {
             "2": {
