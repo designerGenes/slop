@@ -31,6 +31,35 @@ pub struct Config {
     pub redact_secrets: bool,
     pub secret_rules_path: Option<PathBuf>,
     pub graph_token_model: String,
+    /// Root of the persisted graph store. Defaults to
+    /// `$HOME/.cache/slop/graphs`.
+    pub graph_store_dir: Option<PathBuf>,
+    /// Ceiling on files walked when building a project graph.
+    pub graph_max_files: usize,
+    /// Louvain resolution. Above 1.0 splits into more, smaller modules.
+    pub graph_community_resolution: f64,
+    /// How much a co-change edge counts relative to a symbol edge when
+    /// clustering. Below 1.0: a proven reference beats a shared commit.
+    pub graph_cochange_weight: f64,
+    /// Commits of history to mine. 0 disables co-change entirely.
+    pub graph_cochange_commits: usize,
+    /// Commits touching more files than this are sweeps, not coupling.
+    pub graph_cochange_max_files_per_commit: usize,
+    /// Pairs seen in fewer commits than this are coincidence.
+    pub graph_cochange_min_commits: usize,
+    pub graph_cochange_max_edges: usize,
+    /// Write a readable graph artifact alongside the cached JSON.
+    pub graph_emit_artifact: bool,
+    pub tower_restart_alpha: f64,
+    pub tower_rwr_iterations: usize,
+    pub tower_rwr_epsilon: f64,
+    pub tower_community_bonus: f64,
+    pub tower_tier1_mass_fraction: f64,
+    pub tower_tier2_mass_fraction: f64,
+    pub tower_tier3_min_score: f64,
+    pub pages_dir: Option<PathBuf>,
+    pub page_prune_after: String,
+    pub page_tier1_include: bool,
     pub verbose_output: bool,
     pub deslop_cache: bool,
     pub deslop_cache_path: Option<PathBuf>,
@@ -61,6 +90,25 @@ impl Default for Config {
             redact_secrets: false,
             secret_rules_path: None,
             graph_token_model: "o200k_base".to_string(),
+            graph_store_dir: None,
+            graph_max_files: 20_000,
+            graph_community_resolution: 1.0,
+            graph_cochange_weight: 0.5,
+            graph_cochange_commits: 500,
+            graph_cochange_max_files_per_commit: 40,
+            graph_cochange_min_commits: 2,
+            graph_cochange_max_edges: 4_000,
+            graph_emit_artifact: true,
+            tower_restart_alpha: 0.2,
+            tower_rwr_iterations: 30,
+            tower_rwr_epsilon: 1e-9,
+            tower_community_bonus: 0.5,
+            tower_tier1_mass_fraction: 0.60,
+            tower_tier2_mass_fraction: 0.85,
+            tower_tier3_min_score: 1e-6,
+            pages_dir: None,
+            page_prune_after: "7d".to_string(),
+            page_tier1_include: true,
             verbose_output: false,
             // Off by default: deslop idempotency now comes from comparing the
             // block against the file on disk, which is exact and stateless.
@@ -80,9 +128,8 @@ pub fn load_config() -> Config {
 }
 
 pub fn load_config_from(path: &Path) -> Result<Config, SlopError> {
-    let contents = fs::read_to_string(path).map_err(|error| {
-        SlopError::ConfigError(format!("{}: {}", path.display(), error))
-    })?;
+    let contents = fs::read_to_string(path)
+        .map_err(|error| SlopError::ConfigError(format!("{}: {}", path.display(), error)))?;
     serde_yaml::from_str(&contents)
         .map_err(|error| SlopError::ConfigError(format!("{}: {}", path.display(), error)))
 }
@@ -153,6 +200,42 @@ pub fn default_config_yaml() -> String {
          # AWS/Google/Stripe tokens, JWTs, etc.). Override per-run with\n\
          # --allow-secrets or --redact.\n\
          secret_scan: {secret_scan}\n\n\
+         # Root of the persisted graph store used by --project-graph.\n\
+         # Defaults to $HOME/.cache/slop/graphs. Regenerable: safe to delete.\n\
+         graph_store_dir: {graph_store_dir}\n\n\
+         # Ceiling on files walked when building a project graph.\n\
+         graph_max_files: {graph_max_files}\n\n\
+         # Louvain resolution for module detection. >1.0 gives more, smaller\n\
+         # modules; <1.0 gives fewer, larger ones.\n\
+         graph_community_resolution: {graph_community_resolution}\n\n\
+         # Weight of a co-change edge relative to a symbol edge when\n\
+         # clustering. A proven reference is stronger evidence than a shared\n\
+         # commit, so this sits below 1.0.\n\
+         graph_cochange_weight: {graph_cochange_weight}\n\n\
+         # Commits of git history mined for co-change signal. 0 disables it.\n\
+         graph_cochange_commits: {graph_cochange_commits}\n\n\
+         # Commits touching more files than this are treated as sweeps\n\
+         # (formatting, renames, license headers) and contribute nothing.\n\
+         graph_cochange_max_files_per_commit: {graph_cochange_max_files}\n\n\
+         # A pair must co-occur in at least this many commits to count.\n\
+         graph_cochange_min_commits: {graph_cochange_min_commits}\n\n\
+         # Ceiling on retained co-change edges, highest weight first.\n\
+         graph_cochange_max_edges: {graph_cochange_max_edges}\n\n\
+         # Write a readable .project-graph.md next to your slop files in\n\
+         # addition to the cached JSON. The cache is the source of truth.\n\
+         graph_emit_artifact: {graph_emit_artifact}\n\n\
+         # Personalized relevance walk settings for --tower-graph.\n\
+         tower_restart_alpha: {tower_restart_alpha}\n\
+         tower_rwr_iterations: {tower_rwr_iterations}\n\
+         tower_rwr_epsilon: {tower_rwr_epsilon}\n\
+         tower_community_bonus: {tower_community_bonus}\n\
+         tower_tier1_mass_fraction: {tower_tier1_mass_fraction}\n\
+         tower_tier2_mass_fraction: {tower_tier2_mass_fraction}\n\
+         tower_tier3_min_score: {tower_tier3_min_score}\n\n\
+         # Context-page state is durable agent work, not cache data.\n\
+         pages_dir: {pages_dir}\n\
+         page_prune_after: {page_prune_after}\n\
+         page_tier1_include: {page_tier1_include}\n\n\
          # Print the ignored-file annotations in the slopify tree. Override\n\
          # per-run with --verbose.\n\
          verbose_output: {verbose_output}\n\n\
@@ -186,6 +269,25 @@ pub fn default_config_yaml() -> String {
         sel_prov = false,
         sel_prov_max = 2048,
         secret_scan = "warn",
+        graph_store_dir = "~/.cache/slop/graphs",
+        graph_max_files = 20_000,
+        graph_community_resolution = 1.0,
+        graph_cochange_weight = 0.5,
+        graph_cochange_commits = 500,
+        graph_cochange_max_files = 40,
+        graph_cochange_min_commits = 2,
+        graph_cochange_max_edges = 4_000,
+        graph_emit_artifact = true,
+        tower_restart_alpha = 0.2,
+        tower_rwr_iterations = 30,
+        tower_rwr_epsilon = 1e-9,
+        tower_community_bonus = 0.5,
+        tower_tier1_mass_fraction = 0.60,
+        tower_tier2_mass_fraction = 0.85,
+        tower_tier3_min_score = 1e-6,
+        pages_dir = "~/.slop/pages",
+        page_prune_after = "7d",
+        page_tier1_include = true,
         verbose_output = false,
         deslop_cache = false,
         deslop_cache_path = "~/.slop/.slop_blocks_cache",
@@ -193,8 +295,7 @@ pub fn default_config_yaml() -> String {
 }
 
 pub fn ensure_config_dir() -> Result<PathBuf, SlopError> {
-    let config_path =
-        default_config_path().ok_or(SlopError::HomeDirectoryResolutionFailure)?;
+    let config_path = default_config_path().ok_or(SlopError::HomeDirectoryResolutionFailure)?;
     let config_dir = config_path
         .parent()
         .ok_or_else(|| SlopError::ConfigError("config path has no parent directory".to_string()))?;
@@ -231,6 +332,19 @@ pub fn default_index_dir() -> Option<PathBuf> {
     Some(home.join(".cache").join("slop").join("index"))
 }
 
+/// Persisted project and tower graphs. Cache, not state: everything here can be
+/// rebuilt from the repository, so it sits beside the selection index rather
+/// than in `$HOME/.slop/` where losing a file would cost work.
+pub fn default_graph_store_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    Some(home.join(".cache").join("slop").join("graphs"))
+}
+
+pub fn default_pages_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    Some(home.join(".slop").join("pages"))
+}
+
 /// Ledger of already-applied deslop blocks. Lives beside the other slop state
 /// in `$HOME/.slop/` rather than `$HOME/.cache/`, so that clearing an OS cache
 /// directory cannot silently change deslop behavior.
@@ -255,8 +369,7 @@ mod tests {
     fn parses_partial_yaml_with_defaults() {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().join("config.yaml");
-        fs::write(&path, "auto_deslop: true\ngraph_map_tokens: 4096\n")
-            .expect("write config");
+        fs::write(&path, "auto_deslop: true\ngraph_map_tokens: 4096\n").expect("write config");
 
         let config = load_config_from(&path).expect("should parse");
         assert!(config.auto_deslop);
@@ -376,10 +489,7 @@ mod tests {
         let config = load_config_from(&path).expect("should parse");
         assert!(config.verbose_output);
         assert!(config.deslop_cache);
-        assert_eq!(
-            config.deslop_cache_path,
-            Some(PathBuf::from("/tmp/blocks"))
-        );
+        assert_eq!(config.deslop_cache_path, Some(PathBuf::from("/tmp/blocks")));
     }
 
     #[test]

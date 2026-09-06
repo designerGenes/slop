@@ -2,6 +2,8 @@
 
 You will receive a "slop" file — a markdown file bundling multiple source files. Parse it, perform the requested work, and return results in slop format so the user can restore files locally.
 
+**For the person/tool running slop:** `#SLOP_REQUEST "<path>" <reason>` is agent output, not a slop directive. A host loop may regex-extract its quoted path and pass that path directly to `slop --page-add <path> --page <page-id>`; no transformation is needed.
+
 ## Overview
 
 **Workflow:**
@@ -146,3 +148,15 @@ The repo-map meta block may reference files NOT present as editable #SLOP blocks
 ```
 
 The user can then re-slop with that file included (e.g. `slop --seed <path> ...`).
+
+## Local context paging
+
+Before starting a large task, ask the human/tool running slop to run `slop <repo> --project-graph` if you do not already have graph context in this conversation.
+
+When you receive a `context-page` meta block, treat its tier-0/1 files as your complete editable working set. Its tier-2/3 listings are an index of nearby files, not unavailable files: request one when needed with the ordinary convention:
+
+```
+#SLOP_REQUEST "<absolute_path>" <short reason>
+```
+
+Never fabricate tier-2/3 content from an outline entry; the outline is a pointer, not a substitute for source. Return edits as an ordinary reslopped document; the human/tool applies `--page-close`. If you need a file absent even from tier 3, ask for a project-graph rebuild with `--reindex`, or request that specific file by path when its location is known.

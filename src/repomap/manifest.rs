@@ -85,11 +85,7 @@ pub fn collect_repo_files(root: &Path, max_files: usize) -> Manifest {
             })
             .collect();
         ranked.sort();
-        files = ranked
-            .into_iter()
-            .take(max_files)
-            .map(|(_, f)| f)
-            .collect();
+        files = ranked.into_iter().take(max_files).map(|(_, f)| f).collect();
         files.sort();
     }
 
@@ -185,7 +181,11 @@ pub fn render_tree(manifest: &Manifest, in_bundle: &BTreeSet<String>) -> String 
             dir.matches('/').count() + 1
         };
         let label = if dir.is_empty() { "." } else { dir.as_str() };
-        out.push_str(&format!("{}{}/\n", "  ".repeat(depth.saturating_sub(1)), label));
+        out.push_str(&format!(
+            "{}{}/\n",
+            "  ".repeat(depth.saturating_sub(1)),
+            label
+        ));
 
         for name in names {
             let full = if dir.is_empty() {
@@ -277,20 +277,32 @@ mod tests {
         let mut files: Vec<String> = (0..50).map(|i| format!("assets/img{i}.png")).collect();
         files.push("Cargo.toml".into());
         files.push("src/main.rs".into());
-        let m = Manifest { files, truncated: 0, from_git: true };
+        let m = Manifest {
+            files,
+            truncated: 0,
+            from_git: true,
+        };
 
         let mut ranked: Vec<(u8, String)> = m
             .files
             .into_iter()
             .map(|f| {
-                let tier = if importance::is_important(&f) { 0 }
-                           else if is_parseable(&f) { 1 } else { 2 };
+                let tier = if importance::is_important(&f) {
+                    0
+                } else if is_parseable(&f) {
+                    1
+                } else {
+                    2
+                };
                 (tier, f)
             })
             .collect();
         ranked.sort();
         let kept: Vec<String> = ranked.into_iter().take(2).map(|(_, f)| f).collect();
-        assert_eq!(kept, vec!["Cargo.toml".to_string(), "src/main.rs".to_string()]);
+        assert_eq!(
+            kept,
+            vec!["Cargo.toml".to_string(), "src/main.rs".to_string()]
+        );
     }
 
     #[test]

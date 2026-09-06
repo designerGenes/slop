@@ -34,8 +34,10 @@ impl RepoMap {
             return None;
         }
 
-        let chat_rel_fnames: HashSet<String> =
-            chat_files.iter().filter_map(|f| self.rel_fname(f)).collect();
+        let chat_rel_fnames: HashSet<String> = chat_files
+            .iter()
+            .filter_map(|f| self.rel_fname(f))
+            .collect();
 
         // The manifest is unconditional. It is the only part of the map that
         // answers "what else exists in this repo", so it is built before the
@@ -246,7 +248,9 @@ mod tests {
         let f = fixture();
         // One token of budget: the symbol section must be sacrificed, never the
         // inventory of what exists.
-        let map = RepoMap::new(1, f.path()).get_repo_map(&[], &[]).expect("map");
+        let map = RepoMap::new(1, f.path())
+            .get_repo_map(&[], &[])
+            .expect("map");
         assert!(map.contains("## MANIFEST"), "{map}");
         assert!(map.contains("Cargo.toml"), "{map}");
     }
@@ -257,7 +261,10 @@ mod tests {
         // single-file slop produced no graph at all.
         let f = fixture();
         let map = RepoMap::new(4096, f.path())
-            .get_repo_map(&[f.path().join("src/main.rs").to_string_lossy().to_string()], &[])
+            .get_repo_map(
+                &[f.path().join("src/main.rs").to_string_lossy().to_string()],
+                &[],
+            )
             .expect("map");
         assert!(map.contains("## MANIFEST"), "{map}");
     }

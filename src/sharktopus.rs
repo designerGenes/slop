@@ -65,7 +65,10 @@ pub fn ensure_rules(config: &Config) -> Result<Vec<String>, SlopError> {
     } else {
         if has_rule_named(&existing_rules, ALL_RULE_NAME) {
             remove_rule(ALL_RULE_NAME)?;
-            messages.push(format!("removed Sharktopus rule '{}' (auto_deslop is off)", ALL_RULE_NAME));
+            messages.push(format!(
+                "removed Sharktopus rule '{}' (auto_deslop is off)",
+                ALL_RULE_NAME
+            ));
         }
     }
 
@@ -94,9 +97,7 @@ fn list_rules() -> Result<String, SlopError> {
     let rules_path = home
         .as_ref()
         .map(|h| h.join(".config").join("sharktopus").join("rules.json"))
-        .ok_or_else(|| {
-            SlopError::ConfigError("HOME is not set".to_string())
-        })?;
+        .ok_or_else(|| SlopError::ConfigError("HOME is not set".to_string()))?;
 
     let content = std::fs::read_to_string(&rules_path).map_err(|error| {
         SlopError::ConfigError(format!(
@@ -140,12 +141,18 @@ fn add_rule_tagged(to_deslop: &str) -> Result<(), SlopError> {
     let output = Command::new("sharktopus")
         .args([
             "add-rule",
-            "--name", TAGGED_RULE_NAME,
-            "--seniority", "2",
-            "--in-dir", to_deslop,
-            "--glob", SLOP_PATTERN,
-            "--first-line-prefix", TAG_PREFIX,
-            "--run", "slop -d __FILE__",
+            "--name",
+            TAGGED_RULE_NAME,
+            "--seniority",
+            "2",
+            "--in-dir",
+            to_deslop,
+            "--glob",
+            SLOP_PATTERN,
+            "--first-line-prefix",
+            TAG_PREFIX,
+            "--run",
+            "slop -d __FILE__",
         ])
         .output()
         .map_err(|error| {
@@ -166,11 +173,16 @@ fn add_rule_all(to_deslop: &str) -> Result<(), SlopError> {
     let output = Command::new("sharktopus")
         .args([
             "add-rule",
-            "--name", ALL_RULE_NAME,
-            "--seniority", "1",
-            "--in-dir", to_deslop,
-            "--glob", SLOP_PATTERN,
-            "--run", "slop -d __FILE__",
+            "--name",
+            ALL_RULE_NAME,
+            "--seniority",
+            "1",
+            "--in-dir",
+            to_deslop,
+            "--glob",
+            SLOP_PATTERN,
+            "--run",
+            "slop -d __FILE__",
         ])
         .output()
         .map_err(|error| {
@@ -191,12 +203,18 @@ fn add_claude_slop_rule(name: &str, in_dir: &str, to_deslop: &str) -> Result<(),
     let output = Command::new("sharktopus")
         .args([
             "add-rule",
-            "--name", name,
-            "--seniority", "3",
-            "--in-dir", in_dir,
-            "--source-domain", CLAUDE_DOMAIN,
-            "--glob", SLOP_PATTERN,
-            "--move-to", to_deslop,
+            "--name",
+            name,
+            "--seniority",
+            "3",
+            "--in-dir",
+            in_dir,
+            "--source-domain",
+            CLAUDE_DOMAIN,
+            "--glob",
+            SLOP_PATTERN,
+            "--move-to",
+            to_deslop,
         ])
         .output()
         .map_err(|error| {
@@ -217,11 +235,16 @@ fn add_claude_other_rule(name: &str, in_dir: &str) -> Result<(), SlopError> {
     let output = Command::new("sharktopus")
         .args([
             "add-rule",
-            "--name", name,
-            "--seniority", "1",
-            "--in-dir", in_dir,
-            "--source-domain", CLAUDE_DOMAIN,
-            "--move-to", CLAUDE_OUTPUT,
+            "--name",
+            name,
+            "--seniority",
+            "1",
+            "--in-dir",
+            in_dir,
+            "--source-domain",
+            CLAUDE_DOMAIN,
+            "--move-to",
+            CLAUDE_OUTPUT,
         ])
         .output()
         .map_err(|error| {

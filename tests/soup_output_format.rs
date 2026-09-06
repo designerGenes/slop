@@ -24,7 +24,9 @@ fn slop_output_is_markdown_even_for_non_markdown_inputs() {
     let slop_path = output_dir.join("notes.md");
     assert!(slop_path.exists());
     assert_eq!(
-        slop_path.extension().and_then(|extension| extension.to_str()),
+        slop_path
+            .extension()
+            .and_then(|extension| extension.to_str()),
         Some("md")
     );
 }

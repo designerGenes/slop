@@ -290,11 +290,8 @@ fn ignore_slopignore_flag_bypasses_rules_for_directory_walks() {
     fs::create_dir_all(external.parent().expect("external parent"))
         .expect("external directory should be created");
     fs::write(&external, "must not be added").expect("external file should be written");
-    fs::write(
-        root.join(".slopignore"),
-        "*\nslopinclude $HOME/external/\n",
-    )
-    .expect("slopignore should be written");
+    fs::write(root.join(".slopignore"), "*\nslopinclude $HOME/external/\n")
+        .expect("slopignore should be written");
 
     cargo_bin(&home)
         .current_dir(&root)
@@ -325,11 +322,8 @@ fn run_report_shows_external_slopinclude_files() {
     fs::create_dir_all(external.parent().expect("external parent"))
         .expect("external directory should be created");
     fs::write(&external, "external-marker").expect("external file should be written");
-    fs::write(
-        root.join(".slopignore"),
-        "slopinclude $HOME/external/\n",
-    )
-    .expect("slopignore should be written");
+    fs::write(root.join(".slopignore"), "slopinclude $HOME/external/\n")
+        .expect("slopignore should be written");
 
     cargo_bin(&home)
         .current_dir(&root)
@@ -353,8 +347,11 @@ fn subfolder_invocation_uses_own_slopignore_not_parents() {
     // The parent's directives must be invisible from the subfolder: its ignore
     // rule would prune a file inside the calling folder, and its slopinclude
     // targets a file OUTSIDE it.
-    fs::write(root.join(".slopignore"), "*.txt\nslopinclude dir1/file1.txt\n")
-        .expect("root slopignore should be written");
+    fs::write(
+        root.join(".slopignore"),
+        "*.txt\nslopinclude dir1/file1.txt\n",
+    )
+    .expect("root slopignore should be written");
     // The subfolder has a .slopignore of its own: it alone governs the walk.
     fs::write(subfolder.join(".slopignore"), "*.js\n")
         .expect("subfolder slopignore should be written");
@@ -415,7 +412,8 @@ fn slopignore_is_included_when_explicitly_slopincluded() {
     let home = temp.path().join("home");
     let root = temp.path().join("project_root");
     let output_dir = temp.path().join("out");
-    fs::write(root.join(".slopignore"), "*.log\n+ .slopignore\n").expect("slopignore should be written");
+    fs::write(root.join(".slopignore"), "*.log\n+ .slopignore\n")
+        .expect("slopignore should be written");
 
     cargo_bin(&home)
         .current_dir(&root)
@@ -472,8 +470,7 @@ fn current_directory_without_slopignore_uses_manifest_shallow_walk() {
     let output_dir = temp.path().join("out");
     fs::create_dir_all(root.join("child/grandchild")).expect("dirs should be created");
     fs::write(root.join("top.txt"), "top-level").expect("top file should be written");
-    fs::write(root.join("child/near.txt"), "immediate-child")
-        .expect("near file should be written");
+    fs::write(root.join("child/near.txt"), "immediate-child").expect("near file should be written");
     fs::write(root.join("child/grandchild/deep.txt"), "too-deep")
         .expect("deep file should be written");
 
@@ -558,13 +555,11 @@ fn slopheaps_include_other_roots_with_local_exclusions_and_nesting() {
     fs::create_dir_all(&sibling_heap).expect("sibling heap should exist");
     fs::write(pocket.join("pocket.txt"), "pocket-marker").expect("pocket file");
     fs::write(heap.join("src/keep.rs"), "heap-source-marker").expect("heap source file");
-    fs::write(heap.join("src/excluded.rs"), "heap-excluded-marker")
-        .expect("excluded source file");
+    fs::write(heap.join("src/excluded.rs"), "heap-excluded-marker").expect("excluded source file");
     fs::write(heap.join("tool.py"), "heap-python-marker").expect("heap python file");
     fs::write(heap.join("other.txt"), "heap-unselected-marker").expect("heap other file");
     fs::write(nested_heap.join("README.md"), "nested-heap-marker").expect("nested readme");
-    fs::write(sibling_heap.join("sibling.txt"), "sibling-heap-marker")
-        .expect("sibling file");
+    fs::write(sibling_heap.join("sibling.txt"), "sibling-heap-marker").expect("sibling file");
 
     fs::write(
         pocket.join(".slopignore"),
@@ -616,10 +611,8 @@ fn slopheap_options_apply_to_the_targeted_root() {
         "pub fn excluded_marker() {}\n",
     )
     .expect("excluded source file");
-    fs::write(heap.join("lib/helper.rs"), "pub fn helper() {}\n")
-        .expect("graph-only source file");
-    fs::write(heap.join("CONTEXT.md"), "heap-context-marker\n")
-        .expect("context file");
+    fs::write(heap.join("lib/helper.rs"), "pub fn helper() {}\n").expect("graph-only source file");
+    fs::write(heap.join("CONTEXT.md"), "heap-context-marker\n").expect("context file");
     fs::write(
         heap.join("src/secret.txt"),
         "AWS_ACCESS_KEY_ID=AKIA1234567890123456\n",
@@ -683,7 +676,12 @@ fn slopheap_options_apply_to_the_targeted_root() {
         .find(|block| block.original_absolute_path == heap.join("src/secret.txt"))
         .expect("heap secret file should be present");
     assert!(secret.read_only);
-    assert!(secret.content_lines.iter().any(|line| line.contains("REDACTED")));
+    assert!(
+        secret
+            .content_lines
+            .iter()
+            .any(|line| line.contains("REDACTED"))
+    );
     assert!(
         secret
             .content_lines
@@ -735,11 +733,8 @@ fn outer_and_slopheap_selection_options_compose() {
         "pub fn outer_excluded() {}\n",
     )
     .expect("outer excluded seed");
-    fs::write(
-        heap.join("gitignored.rs"),
-        "pub fn outer_gitignored() {}\n",
-    )
-    .expect("outer gitignored seed");
+    fs::write(heap.join("gitignored.rs"), "pub fn outer_gitignored() {}\n")
+        .expect("outer gitignored seed");
     fs::write(heap.join(".gitignore"), "gitignored.rs\n").expect("heap gitignore");
     fs::write(
         pocket.join(".slopignore"),
@@ -858,7 +853,10 @@ fn star_supersede_with_slopinclude_slopping() {
     assert!(slop.contains("util"), "+ src/ should include nested files");
     assert!(slop.contains("readme"), "+ docs/*.md should supersede *");
     assert!(!slop.contains("noise"), "* should ignore junk.log");
-    assert!(!slop.contains("notes"), "* should ignore docs/notes.txt (not .md)");
+    assert!(
+        !slop.contains("notes"),
+        "* should ignore docs/notes.txt (not .md)"
+    );
 }
 
 #[test]

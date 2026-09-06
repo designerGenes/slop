@@ -17,14 +17,9 @@ fn main() {
     // sloping or desloping any files. Intended to be called by a launchd
     // timer so config.yaml changes propagate to Sharktopus live.
     // Supports `slop sync` and `slop --silent sync` forms.
-    let sync_position = args
-        .iter()
-        .position(|a| a == "sync")
-        .filter(|&i| i >= 1);
+    let sync_position = args.iter().position(|a| a == "sync").filter(|&i| i >= 1);
     if let Some(sync_index) = sync_position {
-        let only_flags_before = args[1..sync_index]
-            .iter()
-            .all(|a| a.starts_with('-'));
+        let only_flags_before = args[1..sync_index].iter().all(|a| a.starts_with('-'));
         if only_flags_before {
             match slop::sync() {
                 Ok(messages) => {

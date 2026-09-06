@@ -91,7 +91,10 @@ pub fn parse_document(markdown: &str) -> Result<SoupDocument, SlopError> {
         });
     }
 
-    Ok(SoupDocument { meta_blocks, blocks })
+    Ok(SoupDocument {
+        meta_blocks,
+        blocks,
+    })
 }
 
 pub fn compute_block_id(content_lines: &[String], trailing_newline: bool) -> String {
@@ -221,7 +224,17 @@ pub fn analyze_contents(contents: &str) -> (usize, bool) {
 fn parse_header(
     line: &str,
     line_number: usize,
-) -> Result<(PathBuf, Option<SoupPartialRange>, usize, bool, Option<String>, bool), SlopError> {
+) -> Result<
+    (
+        PathBuf,
+        Option<SoupPartialRange>,
+        usize,
+        bool,
+        Option<String>,
+        bool,
+    ),
+    SlopError,
+> {
     let path_captures = header_path_regex().captures(line).ok_or_else(|| {
         SlopError::SoupParseFailure(format!(
             "malformed slop header on line {line_number}: {line}"
@@ -548,8 +561,10 @@ mod tests {
 
     #[test]
     fn accepts_a_trailing_newline_after_the_last_block() {
-        let document = parse_document("#SLOP \"/tmp/file.txt\" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE true\nhello\n")
-            .expect("document should parse");
+        let document = parse_document(
+            "#SLOP \"/tmp/file.txt\" #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE true\nhello\n",
+        )
+        .expect("document should parse");
 
         assert_eq!(document.blocks.len(), 1);
         assert_eq!(document.blocks[0].content_lines, vec!["hello"]);
@@ -567,8 +582,7 @@ mod tests {
             content_lines: vec!["line1".to_string(), "line2".to_string()],
         };
         let files = vec![source_file("/tmp/file.txt", "hello")];
-        let document =
-            serialize_document(&[meta], &files).expect("document should serialize");
+        let document = serialize_document(&[meta], &files).expect("document should serialize");
 
         assert!(document.starts_with("#SLOP_META \"repo-graph\""));
         assert!(document.contains("line1\nline2\n#SLOP"));
@@ -606,8 +620,7 @@ mod tests {
         };
         let files = vec![source_file("/tmp/file.txt", "content\n")];
 
-        let markdown =
-            serialize_document(&[meta], &files).expect("document should serialize");
+        let markdown = serialize_document(&[meta], &files).expect("document should serialize");
         let parsed = parse_document(&markdown).expect("document should parse");
 
         assert_eq!(parsed.meta_blocks.len(), 1);

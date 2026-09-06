@@ -11,6 +11,17 @@ pub struct CliArgs {
     pub respect_gitignore: bool,
     pub ignore_slopignore: bool,
     pub include_graph: bool,
+    /// Exclusive mode: build the containing repositories' project graphs and
+    /// bundle nothing. See `crate::project_graph`.
+    pub project_graph: bool,
+    pub tower_graph: bool,
+    pub page_open: bool,
+    pub page_add: bool,
+    pub page_close: bool,
+    pub page_list: bool,
+    pub page_prune: bool,
+    pub page_id: Option<String>,
+    pub older_than: Option<String>,
     pub slop_to: Option<PathBuf>,
     pub graph_format: Option<String>,
     pub graph_map_tokens: Option<usize>,

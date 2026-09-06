@@ -80,7 +80,9 @@ pub enum SlopError {
     #[error("repomap generation failed: {0}")]
     RepoMapGenerationFailure(String),
 
-    #[error("--task supplied but config.allow_fuzzy_task is false; use --match/--seed/--symbol, or enable allow_fuzzy_task")]
+    #[error(
+        "--task supplied but config.allow_fuzzy_task is false; use --match/--seed/--symbol, or enable allow_fuzzy_task"
+    )]
     FuzzyTaskDisabled,
 
     #[error("index build failure: {0}")]
@@ -89,20 +91,60 @@ pub enum SlopError {
     #[error("retrieval query failure: {0}")]
     RetrievalQueryFailure(String),
 
-    #[error("slop budget exceeded: highest-priority file {path} ({bytes} bytes) + map already exceed cap ({cap} bytes); raise --max-slop-bytes, narrow selectors, or use partial blocks")]
-    SoupBudgetExceeded { path: PathBuf, bytes: usize, cap: usize },
+    #[error(
+        "slop budget exceeded: highest-priority file {path} ({bytes} bytes) + map already exceed cap ({cap} bytes); raise --max-slop-bytes, narrow selectors, or use partial blocks"
+    )]
+    SoupBudgetExceeded {
+        path: PathBuf,
+        bytes: usize,
+        cap: usize,
+    },
 
-    #[error("base SHA drift for {path}: expected {expected}, got {actual}; file changed since slopification")]
-    BaseShaDrift { path: PathBuf, expected: String, actual: String },
+    #[error(
+        "base SHA drift for {path}: expected {expected}, got {actual}; file changed since slopification"
+    )]
+    BaseShaDrift {
+        path: PathBuf,
+        expected: String,
+        actual: String,
+    },
 
     #[error("write target {path} escapes allowed roots {allowed_roots}", allowed_roots = format_paths(.allowed_roots))]
-    WriteOutsideAllowedRoot { path: PathBuf, allowed_roots: Vec<PathBuf> },
+    WriteOutsideAllowedRoot {
+        path: PathBuf,
+        allowed_roots: Vec<PathBuf>,
+    },
 
     #[error("unexpected #SLOP_META block in returned slop; AI must not emit meta blocks")]
     UnexpectedMetaInReturn,
 
     #[error("secrets detected in slop content: {findings_summary}")]
     SecretsDetected { findings_summary: String },
+
+    #[error(
+        "no git repository found for {0}; --project-graph maps a repository, so every input must live inside one"
+    )]
+    GraphRepoRootUnresolved(PathBuf),
+
+    #[error("graph store failure: {0}")]
+    GraphStoreFailure(String),
+
+    #[error("tower graph seed {0} is outside the repository being graphed")]
+    TowerSeedOutsideRepo(PathBuf),
+    #[error("--tower-graph inputs resolved to no files; nothing to seed the tower with")]
+    TowerSeedSetEmpty,
+    #[error("--tower-graph inputs span more than one repository: {}", format_paths(.0))]
+    TowerSeedsSpanMultipleRepos(Vec<PathBuf>),
+    #[error("no open page found for this repository; use --page-open first")]
+    NoOpenPage,
+    #[error("multiple pages are open for this repository ({}); specify --page <id>", format_ids(.0))]
+    AmbiguousOpenPage(Vec<String>),
+    #[error("page {0} not found")]
+    PageNotFound(String),
+    #[error("page {0} is already closed")]
+    PageAlreadyClosed(String),
+    #[error("returned block for {path} targets a file outside page {page}'s scope")]
+    PageWriteOutsideScope { path: PathBuf, page: String },
 }
 
 fn format_paths(paths: &[PathBuf]) -> String {
@@ -111,4 +153,8 @@ fn format_paths(paths: &[PathBuf]) -> String {
         .map(|path| path.display().to_string())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn format_ids(ids: &[String]) -> String {
+    ids.join(", ")
 }

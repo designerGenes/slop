@@ -101,7 +101,8 @@ pub fn select_files(
     // Tier 1: BFS neighbors of seeds
     if !selectors.seeds.is_empty() && selectors.hops > 0 {
         let adjacency = traverse::build_adjacency(corpus_root);
-        let neighbors = traverse::bfs_neighbors(&adjacency, &selectors.seeds, corpus_root, selectors.hops);
+        let neighbors =
+            traverse::bfs_neighbors(&adjacency, &selectors.seeds, corpus_root, selectors.hops);
 
         for (rel, depth) in neighbors {
             if seen.insert(rel.clone()) {
@@ -110,7 +111,9 @@ pub fn select_files(
                     path: abs,
                     rel_path: rel,
                     score: 1.0 / (1 + depth) as f32,
-                    reason: SelectionReason::Neighbor { hops: selectors.hops },
+                    reason: SelectionReason::Neighbor {
+                        hops: selectors.hops,
+                    },
                 });
             }
         }
@@ -139,13 +142,11 @@ pub fn select_files(
     // Tier 3: BM25 match query
     let need_index = !selectors.matches.is_empty() || selectors.task.is_some();
     if need_index {
-        let (index, reader, fields) =
-            index::ensure_index(corpus_root, config, force_reindex)?;
+        let (index, reader, fields) = index::ensure_index(corpus_root, config, force_reindex)?;
 
         if !selectors.matches.is_empty() {
-            let match_results = query::run_match_query(
-                &index, &reader, &fields, &selectors.matches, top_k,
-            )?;
+            let match_results =
+                query::run_match_query(&index, &reader, &fields, &selectors.matches, top_k)?;
             for sp in match_results {
                 if seen.insert(sp.rel_path.clone()) {
                     candidates.push(sp);
@@ -155,9 +156,7 @@ pub fn select_files(
 
         // Tier 4: fuzzy task query
         if let Some(task) = &selectors.task {
-            let task_results = query::run_task_query(
-                &index, &reader, &fields, task, top_k,
-            )?;
+            let task_results = query::run_task_query(&index, &reader, &fields, task, top_k)?;
             for sp in task_results {
                 if seen.insert(sp.rel_path.clone()) {
                     candidates.push(sp);
@@ -171,12 +170,8 @@ pub fn select_files(
     }
 
     // Budget fill
-    let (selected, dropped) = budget::fill_budget(
-        &candidates,
-        config.max_slop_bytes,
-        map_reserve_bytes,
-        top_k,
-    )?;
+    let (selected, dropped) =
+        budget::fill_budget(&candidates, config.max_slop_bytes, map_reserve_bytes, top_k)?;
 
     Ok(Selection { selected, dropped })
 }
@@ -226,11 +221,17 @@ pub fn build_provenance_block(
         lines.push(format!("{}\t{}\t{:.4}", sp.rel_path, reason_str, sp.score));
     }
 
-    lines.push(format!("dropped: {} files cut for budget", selection.dropped.len()));
+    lines.push(format!(
+        "dropped: {} files cut for budget",
+        selection.dropped.len()
+    ));
 
     let mut content = lines.join("\n");
     if content.len() > max_bytes.saturating_sub(100) {
-        content = content.chars().take(max_bytes.saturating_sub(120)).collect();
+        content = content
+            .chars()
+            .take(max_bytes.saturating_sub(120))
+            .collect();
         content.push_str("\n... (truncated)");
     }
 

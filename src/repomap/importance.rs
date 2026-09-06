@@ -1,24 +1,62 @@
 use std::collections::HashSet;
 
 const IMPORTANT_FILENAMES: &[&str] = &[
-    "README.md", "README.txt", "readme.md", "README.rst", "README",
-    "requirements.txt", "Pipfile", "pyproject.toml", "setup.py", "setup.cfg",
-    "package.json", "yarn.lock", "package-lock.json", "npm-shrinkwrap.json",
-    "Dockerfile", "docker-compose.yml", "docker-compose.yaml",
-    ".gitignore", ".gitattributes", ".dockerignore",
-    "Makefile", "makefile", "CMakeLists.txt",
-    "LICENSE", "LICENSE.txt", "LICENSE.md", "COPYING",
-    "CHANGELOG.md", "CHANGELOG.txt", "HISTORY.md",
-    "CONTRIBUTING.md", "CODE_OF_CONDUCT.md",
-    ".env", ".env.example", ".env.local",
-    "tox.ini", "pytest.ini", ".pytest.ini",
-    ".flake8", ".pylintrc", "mypy.ini",
-    "go.mod", "go.sum", "Cargo.toml", "Cargo.lock",
-    "pom.xml", "build.gradle", "build.gradle.kts",
-    "composer.json", "composer.lock",
-    "Gemfile", "Gemfile.lock",
+    "README.md",
+    "README.txt",
+    "readme.md",
+    "README.rst",
+    "README",
+    "requirements.txt",
+    "Pipfile",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "package.json",
+    "yarn.lock",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "Dockerfile",
+    "docker-compose.yml",
+    "docker-compose.yaml",
+    ".gitignore",
+    ".gitattributes",
+    ".dockerignore",
+    "Makefile",
+    "makefile",
+    "CMakeLists.txt",
+    "LICENSE",
+    "LICENSE.txt",
+    "LICENSE.md",
+    "COPYING",
+    "CHANGELOG.md",
+    "CHANGELOG.txt",
+    "HISTORY.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    ".env",
+    ".env.example",
+    ".env.local",
+    "tox.ini",
+    "pytest.ini",
+    ".pytest.ini",
+    ".flake8",
+    ".pylintrc",
+    "mypy.ini",
+    "go.mod",
+    "go.sum",
+    "Cargo.toml",
+    "Cargo.lock",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "composer.json",
+    "composer.lock",
+    "Gemfile",
+    "Gemfile.lock",
     // slop's own project conventions.
-    ".slopignore", "slop.yaml", "slop.yml",
+    ".slopignore",
+    "slop.yaml",
+    "slop.yml",
 ];
 
 fn has_ext(file_name: &str, exts: &[&str]) -> bool {
@@ -31,10 +69,7 @@ pub fn is_important(rel_path: &str) -> bool {
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("");
-    let dir_name = normalized
-        .parent()
-        .and_then(|p| p.to_str())
-        .unwrap_or("");
+    let dir_name = normalized.parent().and_then(|p| p.to_str()).unwrap_or("");
 
     // `&&` binds tighter than `||`, so the previous spelling
     //     dir == ".github/workflows" && ends_with(".yml") || ends_with(".yaml")

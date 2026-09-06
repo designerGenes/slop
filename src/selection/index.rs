@@ -1,8 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use tantivy::schema::{Field, IndexRecordOption, OwnedValue, Schema, TextFieldIndexing, TextOptions, STRING, STORED, FAST};
+use tantivy::schema::{
+    FAST, Field, IndexRecordOption, OwnedValue, STORED, STRING, Schema, TextFieldIndexing,
+    TextOptions,
+};
 use tantivy::tokenizer::{Token, TokenStream, Tokenizer};
-use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
+use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, doc};
 
 use crate::config::Config;
 use crate::error::SlopError;
@@ -87,7 +90,12 @@ fn split_identifier(token: &str) -> Vec<String> {
             }
             current.clear();
             current.push(c);
-        } else if i > 0 && c.is_uppercase() && chars[i - 1].is_uppercase() && i + 1 < chars.len() && chars[i + 1].is_lowercase() {
+        } else if i > 0
+            && c.is_uppercase()
+            && chars[i - 1].is_uppercase()
+            && i + 1 < chars.len()
+            && chars[i + 1].is_lowercase()
+        {
             if !current.is_empty() {
                 parts.push(current.clone());
             }
@@ -121,11 +129,9 @@ impl IndexFields {
             .set_tokenizer(CODE_TOKENIZER_NAME)
             .set_index_option(IndexRecordOption::WithFreqsAndPositions);
 
-        let content_opts = TextOptions::default()
-            .set_indexing_options(code_indexing.clone());
+        let content_opts = TextOptions::default().set_indexing_options(code_indexing.clone());
 
-        let symbols_opts = TextOptions::default()
-            .set_indexing_options(code_indexing);
+        let symbols_opts = TextOptions::default().set_indexing_options(code_indexing);
 
         let path = builder.add_text_field("path", STRING | STORED);
         let rel_path = builder.add_text_field("rel_path", STRING | STORED);
@@ -135,7 +141,17 @@ impl IndexFields {
         let size = builder.add_u64_field("size", STORED | FAST);
 
         let schema = builder.build();
-        (schema, Self { path, rel_path, content, symbols, mtime, size })
+        (
+            schema,
+            Self {
+                path,
+                rel_path,
+                content,
+                symbols,
+                mtime,
+                size,
+            },
+        )
     }
 }
 
@@ -176,22 +192,20 @@ pub fn ensure_index(
 
     let index = Index::open_in_dir(&index_path)
         .or_else(|_| Index::create_in_dir(&index_path, schema.clone()))
-        .map_err(|e| {
-            SlopError::IndexBuildFailure(format!("open_or_create: {}", e))
-        })?;
+        .map_err(|e| SlopError::IndexBuildFailure(format!("open_or_create: {}", e)))?;
 
     index
         .tokenizers()
         .register(CODE_TOKENIZER_NAME, CodeTokenizer);
 
-    let mut writer = index.writer(50_000_000).map_err(|e| {
-        SlopError::IndexBuildFailure(format!("writer: {}", e))
-    })?;
+    let mut writer = index
+        .writer(50_000_000)
+        .map_err(|e| SlopError::IndexBuildFailure(format!("writer: {}", e)))?;
 
     if force_reindex {
-        writer.delete_all_documents().map_err(|e| {
-            SlopError::IndexBuildFailure(format!("delete_all: {}", e))
-        })?;
+        writer
+            .delete_all_documents()
+            .map_err(|e| SlopError::IndexBuildFailure(format!("delete_all: {}", e)))?;
         index_corpus(&mut writer, &fields, corpus_root)?;
     } else {
         incremental_update(&index, &mut writer, &fields, corpus_root)?;
@@ -215,9 +229,9 @@ fn index_corpus(
     for file_path in &files {
         index_file(writer, fields, corpus_root, Path::new(file_path))?;
     }
-    writer.commit().map_err(|e| {
-        SlopError::IndexBuildFailure(format!("commit: {}", e))
-    })?;
+    writer
+        .commit()
+        .map_err(|e| SlopError::IndexBuildFailure(format!("commit: {}", e)))?;
     Ok(())
 }
 
@@ -229,9 +243,9 @@ fn incremental_update(
 ) -> Result<(), SlopError> {
     let files = crate::repomap::discover_source_files(corpus_root);
 
-    let reader = index.reader().map_err(|e| {
-        SlopError::IndexBuildFailure(format!("reader for update: {}", e))
-    })?;
+    let reader = index
+        .reader()
+        .map_err(|e| SlopError::IndexBuildFailure(format!("reader for update: {}", e)))?;
     let searcher = reader.searcher();
 
     let mut indexed_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -259,9 +273,9 @@ fn incremental_update(
         }
     }
 
-    writer.commit().map_err(|e| {
-        SlopError::IndexBuildFailure(format!("commit: {}", e))
-    })?;
+    writer
+        .commit()
+        .map_err(|e| SlopError::IndexBuildFailure(format!("commit: {}", e)))?;
     Ok(())
 }
 
@@ -271,8 +285,8 @@ fn check_need_reindex(
     abs_path: &str,
     mtime: u64,
 ) -> bool {
-    use tantivy::query::QueryParser;
     use tantivy::collector::TopDocs;
+    use tantivy::query::QueryParser;
 
     let query_parser = QueryParser::for_index(searcher.index(), vec![fields.path]);
     let Ok(query) = query_parser.parse_query(&abs_path) else {

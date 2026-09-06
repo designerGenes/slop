@@ -98,6 +98,16 @@
       "format": "#SLOP_REQUEST \"<absolute_path>\" <short reason>",
       "note": "The user can then re-slop with that file included (e.g. slop --seed <path> ...). This is a convention, not a parser change to slop files."
     },
+    "local_context_paging": {
+      "title": "Local context paging",
+      "instructions": [
+        "Before starting a large task, if you do not already have graph context in this conversation, ask the human/tool running slop to run `slop <repo> --project-graph`.",
+        "When handed a context-page meta block, treat tier-0/1 files as the complete editable working set. Treat tier-2/3 listings as an index of nearby files, not as unavailable files; request a needed file with `#SLOP_REQUEST \"<absolute_path>\" <short reason>`.",
+        "Never fabricate a tier-2/3 file's content from its outline entry; the outline is a pointer, not a substitute for source.",
+        "Return edits as an ordinary reslopped document; the human/tool applies `--page-close`.",
+        "If a task needs a file absent even from tier 3, ask for a project-graph rebuild with `--reindex`, or request the specific file by path when its location is known."
+      ]
+    },
     "host_integration": {
       "auto_deslop": "#SLOP_AUTO_DEslop is NOT a tag that appears inside a slop file. Auto-deslop is a host-side config flag (slop auto_deslop: true in the host's config) that registers a filesystem rule: any *.slop.md file landing in the watched downloads folder is automatically deslopified via `slop -d __FILE__`. If you ever encounter the literal string #SLOP_AUTO_DEslop inside a slop body, treat it as ordinary file content — it is not part of this spec and carries no meaning for your parser."
     },

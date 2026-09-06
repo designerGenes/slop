@@ -177,7 +177,7 @@ fn parse_manifest(contents: &str) -> Result<RulesManifest, String> {
                 return Err(format!(
                     "line {}: invalid manifest statement",
                     line_number + 1
-                ))
+                ));
             }
         }
     }

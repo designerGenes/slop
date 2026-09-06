@@ -7,9 +7,8 @@ use crate::error::SlopError;
 use crate::graph;
 use crate::models::{CliArgs, IgnoreReason, IgnoredEntry, SoupMetaBlock, SourceFile};
 use crate::pathing::{
-    build_output_filename, collect_source_files_reporting_with_slopignore,
-    filter_slopheap_selection, filename_token, resolve_absolute, resolve_output_dir,
-    should_respect_gitignore,
+    build_output_filename, collect_source_files_reporting_with_slopignore, filename_token,
+    filter_slopheap_selection, resolve_absolute, resolve_output_dir, should_respect_gitignore,
 };
 use crate::secrets;
 use crate::selection;
@@ -315,15 +314,11 @@ fn enforce_secrets_by_scope(
                         .is_ok_and(|path| path == source.original_absolute_path)
                 })
         });
-        let allow_secrets = args.allow_secrets
-            || matching_heaps.clone().any(|heap| heap.args.allow_secrets);
+        let allow_secrets =
+            args.allow_secrets || matching_heaps.clone().any(|heap| heap.args.allow_secrets);
         let redact = args.redact || matching_heaps.any(|heap| heap.args.redact);
-        let mut result = secrets::enforce(
-            std::slice::from_ref(&source),
-            config,
-            allow_secrets,
-            redact,
-        )?;
+        let mut result =
+            secrets::enforce(std::slice::from_ref(&source), config, allow_secrets, redact)?;
         enforced.append(&mut result);
     }
     Ok(enforced)
@@ -380,7 +375,7 @@ fn build_graph_meta_blocks(
     Ok(vec![meta_block])
 }
 
-fn build_source_file(path: &PathBuf) -> Result<SourceFile, SlopError> {
+pub(crate) fn build_source_file(path: &PathBuf) -> Result<SourceFile, SlopError> {
     let bytes = fs::read(path).map_err(|error| SlopError::FileReadFailure {
         path: path.clone(),
         source: error,

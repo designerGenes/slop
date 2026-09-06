@@ -121,10 +121,7 @@ pub fn bfs_neighbors(
     visited.into_iter().collect()
 }
 
-pub fn resolve_symbol(
-    corpus_root: &Path,
-    symbol: &str,
-) -> Vec<String> {
+pub fn resolve_symbol(corpus_root: &Path, symbol: &str) -> Vec<String> {
     let files = collect_repo_files(corpus_root);
     let mut defines: HashMap<String, HashSet<String>> = HashMap::new();
     let mut references: HashMap<String, HashSet<String>> = HashMap::new();

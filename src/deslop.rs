@@ -210,6 +210,17 @@ pub fn run_deslop(args: &CliArgs, config: &Config) -> Result<Vec<PathBuf>, SlopE
         }
     };
 
+    apply_document(document, args, config, None)
+}
+
+/// Apply a parsed returned document while optionally restricting writes to an
+/// exact set of paths. Context pages use this rather than broad parent roots.
+pub fn apply_document(
+    document: SoupDocument,
+    args: &CliArgs,
+    config: &Config,
+    allowed_paths: Option<&BTreeSet<PathBuf>>,
+) -> Result<Vec<PathBuf>, SlopError> {
     if !document.meta_blocks.is_empty() {
         eprintln!(
             "warning: {} #SLOP_META block(s) found in slop; these are reference-only and will be skipped during deslop",
@@ -217,6 +228,10 @@ pub fn run_deslop(args: &CliArgs, config: &Config) -> Result<Vec<PathBuf>, SlopE
         );
     }
 
+    let cwd = std::env::current_dir().map_err(|error| SlopError::FileReadFailure {
+        path: PathBuf::from("."),
+        source: error,
+    })?;
     let allowed_roots = compute_allowed_roots(&document.blocks, &args.allow_roots, &cwd);
 
     let cache_path = if args.dry_run {
@@ -231,7 +246,10 @@ pub fn run_deslop(args: &CliArgs, config: &Config) -> Result<Vec<PathBuf>, SlopE
         let restored_path = block.original_absolute_path.clone();
 
         if block.read_only {
-            eprintln!("warning: read-only block for {} skipped in deslop", restored_path.display());
+            eprintln!(
+                "warning: read-only block for {} skipped in deslop",
+                restored_path.display()
+            );
             continue;
         }
 
@@ -259,7 +277,9 @@ pub fn run_deslop(args: &CliArgs, config: &Config) -> Result<Vec<PathBuf>, SlopE
             warn_on_base_sha_drift(&restored_path, sha);
         }
 
-        if !is_within_allowed_roots(&restored_path, &allowed_roots) {
+        let exact_allowed = allowed_paths
+            .is_none_or(|paths| paths.contains(&crate::pathing::normalize_path(&restored_path)));
+        if !exact_allowed || !is_within_allowed_roots(&restored_path, &allowed_roots) {
             return Err(SlopError::WriteOutsideAllowedRoot {
                 path: restored_path.clone(),
                 allowed_roots: allowed_roots.clone(),
@@ -341,7 +361,10 @@ fn compute_allowed_roots(blocks: &[SoupBlock], extra: &[PathBuf], cwd: &Path) ->
     if roots.is_empty() {
         let mut common: Option<PathBuf> = None;
         for block in blocks {
-            let parent = block.original_absolute_path.parent().unwrap_or(Path::new("/"));
+            let parent = block
+                .original_absolute_path
+                .parent()
+                .unwrap_or(Path::new("/"));
             common = Some(match common {
                 None => parent.to_path_buf(),
                 Some(ref c) => common_ancestor(c, parent),
@@ -401,7 +424,12 @@ fn unified_diff(old: &str, new: &str, path: &Path) -> String {
     if result.trim().is_empty() {
         return String::new();
     }
-    format!("--- {} (current)\n+++ {} (slop)\n{}", path.display(), path.display(), result)
+    format!(
+        "--- {} (current)\n+++ {} (slop)\n{}",
+        path.display(),
+        path.display(),
+        result
+    )
 }
 
 fn resolve_direct_slop_document(
@@ -446,10 +474,7 @@ fn looks_like_slop_file(path: &Path) -> bool {
     crate::slop_format::is_slop_file(path)
 }
 
-fn match_slop_file(
-    selectors: &[PathBuf],
-    slop_dir: &Path,
-) -> Result<SoupMatchResult, SlopError> {
+fn match_slop_file(selectors: &[PathBuf], slop_dir: &Path) -> Result<SoupMatchResult, SlopError> {
     let candidates = collect_candidate_slop_files(slop_dir)?;
     let mut matches = Vec::new();
 
@@ -589,8 +614,13 @@ fn reconstruct_contents(lines: &[String], trailing_newline: bool) -> String {
 
 fn materialize_block_contents(path: &Path, block: &SoupBlock) -> Result<String, SlopError> {
     match &block.partial_range {
-        Some(range) => apply_partial_block(path, range, &block.content_lines, block.trailing_newline),
-        None => Ok(reconstruct_contents(&block.content_lines, block.trailing_newline)),
+        Some(range) => {
+            apply_partial_block(path, range, &block.content_lines, block.trailing_newline)
+        }
+        None => Ok(reconstruct_contents(
+            &block.content_lines,
+            block.trailing_newline,
+        )),
     }
 }
 
@@ -676,7 +706,8 @@ mod tests {
     use crate::models::{SoupBlock, SoupDocument, SoupPartialRange};
 
     use super::{
-        apply_partial_block, document_matches, find_matching_slop_file, resolve_direct_slop_document,
+        apply_partial_block, document_matches, find_matching_slop_file,
+        resolve_direct_slop_document,
     };
 
     fn document(paths: &[&str]) -> SoupDocument {
@@ -806,9 +837,11 @@ mod tests {
         )
         .expect_err("partial block should fail");
 
-        assert!(error
-            .to_string()
-            .contains("partial slop range 2-4 exceeds existing file length 2"));
+        assert!(
+            error
+                .to_string()
+                .contains("partial slop range 2-4 exceeds existing file length 2")
+        );
     }
 
     #[test]
@@ -928,9 +961,21 @@ mod tests {
         let c = mk(&["alpha", "beta"], false);
         let d = mk(&["alpha", "gamma"], true);
 
-        assert_eq!(block_id_for(&a), block_id_for(&b), "identical content + trailing must hash equal");
-        assert_ne!(block_id_for(&a), block_id_for(&c), "trailing newline must affect the id");
-        assert_ne!(block_id_for(&a), block_id_for(&d), "different content must hash differently");
+        assert_eq!(
+            block_id_for(&a),
+            block_id_for(&b),
+            "identical content + trailing must hash equal"
+        );
+        assert_ne!(
+            block_id_for(&a),
+            block_id_for(&c),
+            "trailing newline must affect the id"
+        );
+        assert_ne!(
+            block_id_for(&a),
+            block_id_for(&d),
+            "different content must hash differently"
+        );
     }
 
     #[test]
@@ -973,7 +1018,7 @@ mod tests {
 
     #[test]
     fn cache_evicts_oldest_beyond_limit() {
-        use super::{DeslopCache, DESLOP_CACHE_LIMIT};
+        use super::{DESLOP_CACHE_LIMIT, DeslopCache};
 
         let temp = tempdir().expect("tempdir");
         let mut cache = DeslopCache::load(temp.path().join("cache"));
@@ -985,7 +1030,10 @@ mod tests {
         assert!(cache.contains(&format!("block-{:04}", DESLOP_CACHE_LIMIT - 1)));
 
         cache.record("new-block".to_string());
-        assert!(!cache.contains("block-0000"), "oldest entry must be evicted");
+        assert!(
+            !cache.contains("block-0000"),
+            "oldest entry must be evicted"
+        );
         assert!(cache.contains("new-block"));
         assert_eq!(
             cache.entry_count(),

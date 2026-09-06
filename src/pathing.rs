@@ -139,9 +139,11 @@ impl ExclusionMatcher {
 
     fn with_additional(&self, patterns: &[String]) -> Self {
         let mut combined = self.clone();
-        combined
-            .patterns
-            .extend(patterns.iter().map(|pattern| Self::compile_pattern(pattern)));
+        combined.patterns.extend(
+            patterns
+                .iter()
+                .map(|pattern| Self::compile_pattern(pattern)),
+        );
         combined
     }
 }
@@ -993,14 +995,15 @@ fn collect_dir(
             continue;
         }
 
-        if !is_supported_file_type(&entry_type) && rules_manifest::errors(PathAction::UnsupportedFile) {
+        if !is_supported_file_type(&entry_type)
+            && rules_manifest::errors(PathAction::UnsupportedFile)
+        {
             return Err(SlopError::UnsupportedFileType(entry_path.to_path_buf()));
         }
 
         if entry_metadata.is_file() {
-            if !rules_manifest::selects_directory_file(
-                exclusion_matcher.should_exclude(entry_path),
-            ) {
+            if !rules_manifest::selects_directory_file(exclusion_matcher.should_exclude(entry_path))
+            {
                 record_ignored(ignored, entry_path, false, IgnoreReason::Exclude);
                 continue;
             }
@@ -1133,14 +1136,15 @@ fn collect_dir_respecting_gitignore(
             continue;
         }
 
-        if !is_supported_file_type(&entry_type) && rules_manifest::errors(PathAction::UnsupportedFile) {
+        if !is_supported_file_type(&entry_type)
+            && rules_manifest::errors(PathAction::UnsupportedFile)
+        {
             return Err(SlopError::UnsupportedFileType(entry_path.to_path_buf()));
         }
 
         if entry_metadata.is_file() {
-            if !rules_manifest::selects_directory_file(
-                exclusion_matcher.should_exclude(entry_path),
-            ) {
+            if !rules_manifest::selects_directory_file(exclusion_matcher.should_exclude(entry_path))
+            {
                 record_ignored(ignored, entry_path, false, IgnoreReason::Exclude);
                 continue;
             }
@@ -1638,9 +1642,8 @@ mod tests {
         fs::write(root.join("vendor/a.rs"), "skip").expect("file should be written");
         fs::write(root.join("vendor/deep/b.rs"), "skip").expect("file should be written");
 
-        let report =
-            collect_source_files_reporting(&[root.clone()], Some(usize::MAX), &[], false)
-                .expect("collection should succeed");
+        let report = collect_source_files_reporting(&[root.clone()], Some(usize::MAX), &[], false)
+            .expect("collection should succeed");
 
         assert!(report.files.contains(&root.join("keep.rs")));
         assert!(
@@ -1814,7 +1817,10 @@ mod tests {
 
         // Superseded paths must not linger in the ignored report.
         assert!(
-            !report.ignored.iter().any(|e| e.path == root.join("keep.txt")),
+            !report
+                .ignored
+                .iter()
+                .any(|e| e.path == root.join("keep.txt")),
             "a rescued file is not ignored"
         );
         assert!(
@@ -1826,7 +1832,10 @@ mod tests {
             "a directory whose contents were rescued is not ignored"
         );
         assert!(
-            report.ignored.iter().any(|e| e.path == root.join("drop.log")),
+            report
+                .ignored
+                .iter()
+                .any(|e| e.path == root.join("drop.log")),
             "a genuinely ignored file is still reported"
         );
         assert!(

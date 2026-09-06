@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use clap::error::ErrorKind;
 use clap::Parser;
+use clap::error::ErrorKind;
 
 use crate::error::SlopError;
 use crate::models::CliArgs;
@@ -30,6 +30,26 @@ struct RawCliArgs {
     ignore_slopignore: bool,
     #[arg(short = 'g', long = "include-graph")]
     include_graph: bool,
+    /// Exclusive mode: build the project graph of every repository containing
+    /// the inputs. Nothing is slopified.
+    #[arg(long = "project-graph")]
+    project_graph: bool,
+    #[arg(long = "tower-graph")]
+    tower_graph: bool,
+    #[arg(long = "page-open")]
+    page_open: bool,
+    #[arg(long = "page-add")]
+    page_add: bool,
+    #[arg(long = "page-close")]
+    page_close: bool,
+    #[arg(long = "page-list")]
+    page_list: bool,
+    #[arg(long = "page-prune")]
+    page_prune: bool,
+    #[arg(long = "page", value_name = "ID")]
+    page_id: Option<String>,
+    #[arg(long = "older-than", value_name = "DURATION")]
+    older_than: Option<String>,
     #[arg(long = "slop-to")]
     slop_to: Option<PathBuf>,
     #[arg(long = "graph-format")]
@@ -82,18 +102,20 @@ where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
-    let parsed = RawCliArgs::try_parse_from(args)
-        .map_err(|error| {
-            match error.kind() {
-                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
-                    let _ = error.print();
-                    std::process::exit(0);
-                }
-                _ => SlopError::InvalidCliUsage(error.to_string()),
-            }
-        })?;
+    let parsed = RawCliArgs::try_parse_from(args).map_err(|error| match error.kind() {
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+            let _ = error.print();
+            std::process::exit(0);
+        }
+        _ => SlopError::InvalidCliUsage(error.to_string()),
+    })?;
 
-    if parsed.inputs.is_empty() && !parsed.deslop {
+    if parsed.inputs.is_empty()
+        && !parsed.deslop
+        && !parsed.page_close
+        && !parsed.page_list
+        && !parsed.page_prune
+    {
         return Err(SlopError::InvalidCliUsage(
             "at least one input path is required unless -d/--deslop is reading a slop document from stdin"
                 .to_string(),
@@ -106,7 +128,160 @@ where
         ));
     }
 
-    Ok(cli_args_from_raw(parsed))
+    let args = cli_args_from_raw(parsed);
+    validate_process_modes(&args)?;
+    if args.project_graph {
+        validate_project_graph_options(&args)?;
+    }
+    if args.tower_graph {
+        validate_tower_graph_options(&args)?;
+    }
+
+    Ok(args)
+}
+
+fn validate_process_modes(args: &CliArgs) -> Result<(), SlopError> {
+    let modes = [
+        ("--deslop", args.deslop),
+        ("--project-graph", args.project_graph),
+        ("--tower-graph", args.tower_graph),
+        ("--page-open", args.page_open),
+        ("--page-add", args.page_add),
+        ("--page-close", args.page_close),
+        ("--page-list", args.page_list),
+        ("--page-prune", args.page_prune),
+    ];
+    let enabled: Vec<&str> = modes
+        .into_iter()
+        .filter_map(|(name, set)| set.then_some(name))
+        .collect();
+    if enabled.len() > 1 {
+        return Err(SlopError::InvalidCliUsage(format!(
+            "{} cannot be combined with {}",
+            enabled[0], enabled[1]
+        )));
+    }
+    Ok(())
+}
+
+/// `--project-graph` reads its inputs as a way of naming repositories, not as a
+/// payload. Every flag that shapes a bundle is therefore meaningless here, and
+/// meaningless flags are rejected rather than ignored: silently dropping
+/// `--match` would let someone believe they had scoped a graph they had not.
+fn validate_project_graph_options(args: &CliArgs) -> Result<(), SlopError> {
+    let mut unsupported = Vec::new();
+
+    if args.deslop {
+        unsupported.push("--deslop");
+    }
+    if args.recursive {
+        unsupported.push("-r/--recursive (a project graph always covers the whole repository)");
+    }
+    if !args.matches.is_empty() {
+        unsupported.push("--match");
+    }
+    if !args.seeds.is_empty() {
+        unsupported.push("--seed");
+    }
+    if !args.symbols.is_empty() {
+        unsupported.push("--symbol");
+    }
+    if args.task.is_some() {
+        unsupported.push("--task");
+    }
+    if args.hops.is_some() {
+        unsupported.push("--hops");
+    }
+    if args.top_k.is_some() {
+        unsupported.push("--top-k");
+    }
+    if args.explain_selection {
+        unsupported.push("--explain-selection");
+    }
+    if !args.context_files.is_empty() {
+        unsupported.push("--context-file");
+    }
+    if !args.exclude.is_empty() {
+        unsupported.push("-x/--exclude");
+    }
+    if args.include_graph {
+        unsupported.push("-g/--include-graph (there is no slop here to attach a graph to)");
+    }
+    if args.max_slop_bytes.is_some() {
+        unsupported.push("--max-slop-bytes");
+    }
+    if args.dry_run {
+        unsupported.push("--dry-run");
+    }
+    if args.redact {
+        unsupported.push("--redact");
+    }
+    if args.allow_secrets {
+        unsupported.push("--allow-secrets");
+    }
+
+    if unsupported.is_empty() {
+        Ok(())
+    } else {
+        Err(SlopError::InvalidCliUsage(format!(
+            "--project-graph builds a graph and bundles nothing, so it cannot use: {}",
+            unsupported.join(", ")
+        )))
+    }
+}
+
+fn validate_tower_graph_options(args: &CliArgs) -> Result<(), SlopError> {
+    let mut unsupported = Vec::new();
+    if !args.matches.is_empty() {
+        unsupported.push("--match");
+    }
+    if !args.seeds.is_empty() {
+        unsupported.push("--seed");
+    }
+    if !args.symbols.is_empty() {
+        unsupported.push("--symbol");
+    }
+    if args.task.is_some() {
+        unsupported.push("--task");
+    }
+    if args.hops.is_some() {
+        unsupported.push("--hops");
+    }
+    if args.top_k.is_some() {
+        unsupported.push("--top-k");
+    }
+    if args.explain_selection {
+        unsupported.push("--explain-selection");
+    }
+    if !args.context_files.is_empty() {
+        unsupported.push("--context-file");
+    }
+    if !args.exclude.is_empty() {
+        unsupported.push("-x/--exclude");
+    }
+    if args.include_graph {
+        unsupported.push("-g/--include-graph");
+    }
+    if args.max_slop_bytes.is_some() {
+        unsupported.push("--max-slop-bytes");
+    }
+    if args.dry_run {
+        unsupported.push("--dry-run");
+    }
+    if args.redact {
+        unsupported.push("--redact");
+    }
+    if args.allow_secrets {
+        unsupported.push("--allow-secrets");
+    }
+    if unsupported.is_empty() {
+        Ok(())
+    } else {
+        Err(SlopError::InvalidCliUsage(format!(
+            "--tower-graph builds a relevance graph and bundles nothing, so it cannot use: {}",
+            unsupported.join(", ")
+        )))
+    }
 }
 
 /// Parse options attached to a slopheap closing directive with the exact same
@@ -161,6 +336,12 @@ fn validate_slopheap_options(args: &CliArgs) -> Result<(), SlopError> {
     if args.recursive {
         unsupported.push("--recursive (slopheap includes are already recursive)");
     }
+    if args.project_graph {
+        unsupported.push("--project-graph");
+    }
+    if args.tower_graph {
+        unsupported.push("--tower-graph");
+    }
     if args.inputs.len() != 1 {
         unsupported.push("positional inputs");
     }
@@ -186,6 +367,15 @@ fn cli_args_from_raw(parsed: RawCliArgs) -> CliArgs {
         respect_gitignore: parsed.respect_gitignore,
         ignore_slopignore: parsed.ignore_slopignore,
         include_graph: parsed.include_graph,
+        project_graph: parsed.project_graph,
+        tower_graph: parsed.tower_graph,
+        page_open: parsed.page_open,
+        page_add: parsed.page_add,
+        page_close: parsed.page_close,
+        page_list: parsed.page_list,
+        page_prune: parsed.page_prune,
+        page_id: parsed.page_id,
+        older_than: parsed.older_than,
         slop_to: parsed.slop_to,
         graph_format: parsed.graph_format,
         graph_map_tokens: parsed.graph_map_tokens,
@@ -241,8 +431,8 @@ mod tests {
 
     #[test]
     fn parses_respect_gitignore_flag() {
-        let result = parse_cli_args_from(["slop", "--respect-gitignore", "file.txt"])
-            .expect("should parse");
+        let result =
+            parse_cli_args_from(["slop", "--respect-gitignore", "file.txt"]).expect("should parse");
         assert!(result.respect_gitignore);
     }
 
@@ -294,13 +484,114 @@ mod tests {
 
     #[test]
     fn parses_slop_to_flag() {
-        let result =
-            parse_cli_args_from(["slop", "--slop-to", "/tmp/out", "file.txt"])
-                .expect("should parse");
+        let result = parse_cli_args_from(["slop", "--slop-to", "/tmp/out", "file.txt"])
+            .expect("should parse");
         assert_eq!(
             result.slop_to.as_deref(),
             Some(std::path::Path::new("/tmp/out"))
         );
+    }
+
+    #[test]
+    fn parses_project_graph_flag() {
+        let result = parse_cli_args_from(["slop", "--project-graph", "src"]).expect("should parse");
+        assert!(result.project_graph);
+        assert_eq!(result.inputs, vec![std::path::PathBuf::from("src")]);
+    }
+
+    #[test]
+    fn project_graph_defaults_to_false() {
+        let result = parse_cli_args_from(["slop", "file.txt"]).expect("should parse");
+        assert!(!result.project_graph);
+    }
+
+    #[test]
+    fn project_graph_still_requires_an_input_to_locate_the_repository() {
+        let error = parse_cli_args_from(["slop", "--project-graph"])
+            .expect_err("nothing names a repository");
+        assert!(error.to_string().contains("required"), "{error}");
+    }
+
+    #[test]
+    fn project_graph_rejects_bundle_shaping_flags_instead_of_ignoring_them() {
+        // The dangerous failure is the silent one: a user who passes --match
+        // and believes the resulting graph was scoped by it.
+        let error = parse_cli_args_from(["slop", "--project-graph", "--match", "login", "src"])
+            .expect_err("selection cannot scope a project graph");
+        assert!(error.to_string().contains("--match"), "{error}");
+    }
+
+    #[test]
+    fn project_graph_rejects_recursive_with_an_explanation() {
+        let error = parse_cli_args_from(["slop", "--project-graph", "-r", "src"])
+            .expect_err("recursion is not a thing a whole-repo graph can do");
+        assert!(error.to_string().contains("whole repository"), "{error}");
+    }
+
+    #[test]
+    fn project_graph_accepts_output_and_rebuild_flags() {
+        let result = parse_cli_args_from([
+            "slop",
+            "--project-graph",
+            "--reindex",
+            "--slop-to",
+            "/tmp/out",
+            "--silent",
+            "src",
+        ])
+        .expect("these all still make sense for a graph run");
+        assert!(result.project_graph);
+        assert!(result.reindex);
+        assert!(result.silent);
+    }
+
+    #[test]
+    fn a_slopheap_cannot_turn_the_outer_run_into_a_graph_build() {
+        let error = parse_slopheap_options("--project-graph", std::path::Path::new("/tmp/project"))
+            .expect_err("heap options must not seize the process mode");
+        assert!(
+            error
+                .to_string()
+                .contains("cannot control the outer process")
+        );
+    }
+
+    #[test]
+    fn tower_graph_allows_recursive_seeds_but_rejects_bundle_selection() {
+        let args = parse_cli_args_from(["slop", "--tower-graph", "-r", "src"])
+            .expect("recursive tower seed set is valid");
+        assert!(args.tower_graph);
+        assert!(args.recursive);
+
+        let error = parse_cli_args_from(["slop", "--tower-graph", "--match", "login", "src"])
+            .expect_err("selection cannot scope a tower graph");
+        assert!(
+            error
+                .to_string()
+                .contains("--tower-graph builds a relevance graph")
+        );
+        assert!(error.to_string().contains("--match"));
+    }
+
+    #[test]
+    fn page_close_and_list_do_not_require_inputs() {
+        assert!(
+            parse_cli_args_from(["slop", "--page-close"])
+                .expect("close parses")
+                .page_close
+        );
+        assert!(
+            parse_cli_args_from(["slop", "--page-list"])
+                .expect("list parses")
+                .page_list
+        );
+    }
+
+    #[test]
+    fn process_modes_are_mutually_exclusive() {
+        let error = parse_cli_args_from(["slop", "--tower-graph", "--page-open", "src"])
+            .expect_err("two process modes conflict");
+        assert!(error.to_string().contains("cannot be combined"));
     }
 
     #[test]
@@ -323,6 +614,10 @@ mod tests {
     fn rejects_process_mode_options_in_slopheaps() {
         let error = parse_slopheap_options("--dry-run", std::path::Path::new("/tmp/project"))
             .expect_err("process mode should not be silently ignored");
-        assert!(error.to_string().contains("cannot control the outer process"));
+        assert!(
+            error
+                .to_string()
+                .contains("cannot control the outer process")
+        );
     }
 }

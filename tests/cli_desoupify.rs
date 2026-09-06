@@ -108,11 +108,9 @@ fn deslop_reads_a_slop_document_from_stdin_without_a_selector() {
     let temp = tempdir().expect("tempdir should exist");
     let file = temp.path().join("file.txt");
     fs::write(&file, "old\n").expect("source should be written");
-    let path = serde_json::to_string(&file.to_string_lossy().to_string())
-        .expect("path should serialize");
-    let slop = format!(
-        "#SLOP {path} #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 1\nnew\n"
-    );
+    let path =
+        serde_json::to_string(&file.to_string_lossy().to_string()).expect("path should serialize");
+    let slop = format!("#SLOP {path} #SLOPED_LINES 1 #SLOP_TRAILING_NEWLINE 1\nnew\n");
 
     cargo_bin()
         .args(["-d"])

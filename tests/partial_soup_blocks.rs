@@ -96,7 +96,9 @@ fn deslop_reports_partial_ranges_that_exceed_existing_file_length() {
         .arg(&slop_file)
         .assert()
         .failure()
-        .stderr(contains("partial slop range 2-4 exceeds existing file length 2"));
+        .stderr(contains(
+            "partial slop range 2-4 exceeds existing file length 2",
+        ));
 }
 
 #[test]
@@ -152,11 +154,7 @@ fn deslop_partial_block_is_idempotent_across_runs() {
 
     let expected = "line1\nline2 changed\nline3 changed\nline 3.1 new line!\nline4\n";
 
-    cargo_bin()
-        .args(["-d"])
-        .arg(&slop_file)
-        .assert()
-        .success();
+    cargo_bin().args(["-d"]).arg(&slop_file).assert().success();
 
     assert_eq!(
         fs::read_to_string(&path).expect("file should be updated after first run"),

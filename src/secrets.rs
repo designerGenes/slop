@@ -63,7 +63,8 @@ fn build_rules() -> Vec<Rule> {
         },
         Rule {
             name: "jwt",
-            pattern: regex::Regex::new(r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+").unwrap(),
+            pattern: regex::Regex::new(r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+                .unwrap(),
             severity: Severity::Block,
         },
         Rule {
@@ -73,7 +74,8 @@ fn build_rules() -> Vec<Rule> {
         },
         Rule {
             name: "authorization_assignment",
-            pattern: regex::Regex::new(r#"(?i)authorization\s*[:=]\s*['"]?[A-Za-z0-9._-]{20,}"#).unwrap(),
+            pattern: regex::Regex::new(r#"(?i)authorization\s*[:=]\s*['"]?[A-Za-z0-9._-]{20,}"#)
+                .unwrap(),
             severity: Severity::Block,
         },
         Rule {
@@ -101,7 +103,9 @@ fn is_sensitive_filename(path: &Path) -> bool {
 /// they appear in.
 fn is_content_digest(token: &str) -> bool {
     const DIGEST_PREFIXES: &[&str] = &["sha1-", "sha256-", "sha384-", "sha512-", "sha512/", "md5-"];
-    DIGEST_PREFIXES.iter().any(|prefix| token.starts_with(prefix))
+    DIGEST_PREFIXES
+        .iter()
+        .any(|prefix| token.starts_with(prefix))
 }
 
 /// Machine-generated dependency lockfiles consist almost entirely of registry
@@ -229,16 +233,18 @@ pub fn scan_files(files: &[SourceFile]) -> Vec<Finding> {
                 continue;
             }
 
-            for token in line.split(|c: char| c.is_whitespace() || c == '=' || c == '"' || c == '\'') {
+            for token in
+                line.split(|c: char| c.is_whitespace() || c == '=' || c == '"' || c == '\'')
+            {
                 if is_content_digest(token) {
                     continue;
                 }
                 if !looks_like_secret_token(token) {
                     continue;
                 }
-                let already_found = findings.iter().any(|f| {
-                    f.line == i + 1 && f.file == rel_name
-                });
+                let already_found = findings
+                    .iter()
+                    .any(|f| f.line == i + 1 && f.file == rel_name);
                 if !already_found {
                     findings.push(Finding {
                         file: rel_name.clone(),
@@ -358,7 +364,10 @@ pub fn enforce(
     let summary = findings_summary(&findings);
 
     if allow_secrets {
-        eprintln!("warning: secrets detected but --allow-secrets bypasses: {}", summary);
+        eprintln!(
+            "warning: secrets detected but --allow-secrets bypasses: {}",
+            summary
+        );
         if redact {
             let mut files_mut = files.to_vec();
             apply_redaction(&mut files_mut, &findings);
@@ -370,7 +379,11 @@ pub fn enforce(
     if redact {
         let mut files_mut = files.to_vec();
         apply_redaction(&mut files_mut, &findings);
-        eprintln!("redacted {} findings in {} files", findings.len(), files.len());
+        eprintln!(
+            "redacted {} findings in {} files",
+            findings.len(),
+            files.len()
+        );
         return Ok(files_mut);
     }
 
@@ -387,7 +400,7 @@ pub fn enforce(
 
 #[cfg(test)]
 mod tests {
-    use super::{looks_like_secret_token, scan_files, Severity};
+    use super::{Severity, looks_like_secret_token, scan_files};
     use crate::models::SourceFile;
     use std::path::PathBuf;
 
@@ -414,9 +427,7 @@ mod tests {
 
     #[test]
     fn flags_opaque_mixed_class_secret_like_tokens() {
-        assert!(looks_like_secret_token(
-            "aB3xK9mN2pQr7sT4vUwXyZ0aBcDeFgHi"
-        ));
+        assert!(looks_like_secret_token("aB3xK9mN2pQr7sT4vUwXyZ0aBcDeFgHi"));
         assert!(looks_like_secret_token(
             "7B3xK9mN2pQr7sT4vUwXyZ0aBcDeFgHiJkLm"
         ));
@@ -484,12 +495,8 @@ mod tests {
                    AWS_ACCESS_KEY_ID=AKIA1234567890123456\n";
         let findings = scan_files(&[source_file("yarn.lock", src)]);
 
-        assert!(findings
-            .iter()
-            .all(|f| f.rule != "high_entropy"));
-        assert!(findings
-            .iter()
-            .any(|f| f.rule == "aws_access_key_id"));
+        assert!(findings.iter().all(|f| f.rule != "high_entropy"));
+        assert!(findings.iter().any(|f| f.rule == "aws_access_key_id"));
     }
 
     #[test]
@@ -525,8 +532,10 @@ mod tests {
     #[test]
     fn sensitive_filename_still_flagged_independently() {
         let findings = scan_files(&[source_file("secrets.rs", "// harmless\n")]);
-        assert!(findings
-            .iter()
-            .any(|f| f.rule == "sensitive_filename" && f.severity == Severity::Block));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule == "sensitive_filename" && f.severity == Severity::Block)
+        );
     }
 }

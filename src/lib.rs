@@ -3,19 +3,23 @@ pub mod config;
 pub mod deslop;
 pub mod error;
 pub mod graph;
+pub mod graphstore;
 pub mod logo;
 pub mod manual_deslop;
 pub mod models;
 pub mod open;
+pub mod page;
 pub mod pathing;
+pub mod project_graph;
 pub mod repomap;
 pub mod rules_manifest;
 pub mod secrets;
 pub mod selection;
 pub mod sharktopus;
-pub mod slop_format;
 pub mod slop;
+pub mod slop_format;
 pub mod slopignore;
+pub mod tower_graph;
 pub mod tree;
 
 use cli::parse_cli_args;
@@ -59,6 +63,41 @@ pub fn run_with_opener(
 ) -> Result<(), SlopError> {
     if args.deslop {
         deslop::run_deslop(args, config)?;
+        return Ok(());
+    }
+
+    // Graph modes produce artifacts, not slops, and return before any of the
+    // bundling machinery runs.
+    if args.project_graph {
+        let artifacts = project_graph::run_project_graph(args, config)?;
+        if args.show_output_dir {
+            if let Some(directory) = artifacts.first().and_then(|path| path.parent()) {
+                if let Err(error) = open::open_output_dir_with(opener, directory) {
+                    return Err(SlopError::OpenDirectoryFailure {
+                        directory: directory.to_path_buf(),
+                        message: error.to_string(),
+                    });
+                }
+            }
+        }
+        return Ok(());
+    }
+    if args.tower_graph {
+        let artifacts = tower_graph::run_tower_graph(args, config)?;
+        if args.show_output_dir
+            && let Some(directory) = artifacts.first().and_then(|path| path.parent())
+        {
+            open::open_output_dir_with(opener, directory).map_err(|error| {
+                SlopError::OpenDirectoryFailure {
+                    directory: directory.to_path_buf(),
+                    message: error.to_string(),
+                }
+            })?;
+        }
+        return Ok(());
+    }
+    if args.page_open || args.page_add || args.page_close || args.page_list || args.page_prune {
+        page::run(args, config)?;
         return Ok(());
     }
 

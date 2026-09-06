@@ -155,8 +155,8 @@ fn slopifies_only_direct_files_without_recursive_flag() {
         .assert()
         .success();
 
-    let slop = fs::read_to_string(output_dir.join("file1_file2.md"))
-        .expect("slop file should exist");
+    let slop =
+        fs::read_to_string(output_dir.join("file1_file2.md")).expect("slop file should exist");
     assert!(!slop.contains("three")); // nested file should not be included
 }
 
@@ -425,9 +425,9 @@ fn rejects_declared_line_count_exceeding_available_lines() {
         .arg(&slop_dir)
         .assert()
         .failure()
-    .stderr(predicates::str::contains(
-        "declared line count 2 exceeds available lines",
-    ));
+        .stderr(predicates::str::contains(
+            "declared line count 2 exceeds available lines",
+        ));
 }
 
 #[test]
@@ -450,8 +450,8 @@ fn excludes_files_by_pattern() {
         .assert()
         .success();
 
-    let slop = fs::read_to_string(output_dir.join("file1_file3.md"))
-        .expect("slop file should exist");
+    let slop =
+        fs::read_to_string(output_dir.join("file1_file3.md")).expect("slop file should exist");
     assert!(slop.contains("one"));
     assert!(slop.contains("three"));
     assert!(!slop.contains("two")); // swift file should be excluded
@@ -478,8 +478,7 @@ fn excludes_files_by_folder_name() {
         .assert()
         .success();
 
-    let slop = fs::read_to_string(output_dir.join("file1.md"))
-        .expect("slop file should exist");
+    let slop = fs::read_to_string(output_dir.join("file1.md")).expect("slop file should exist");
     assert!(slop.contains("one"));
     assert!(!slop.contains("two")); // folder2 file should be excluded
 }
@@ -505,8 +504,8 @@ fn excludes_files_by_regex() {
         .success();
 
     // Files are sorted alphabetically, so the output filename will be example_file1.md
-    let slop = fs::read_to_string(output_dir.join("example_file1.md"))
-        .expect("slop file should exist");
+    let slop =
+        fs::read_to_string(output_dir.join("example_file1.md")).expect("slop file should exist");
     assert!(slop.contains("one"));
     assert!(slop.contains("three"));
     assert!(!slop.contains("two")); // test_file should be excluded
@@ -557,8 +556,7 @@ fn respects_gitignore_when_flag_passed() {
     let temp = tempdir().expect("tempdir should exist");
     let directory = temp.path().join("folder1");
     fs::create_dir_all(&directory).expect("directory should be created");
-    fs::write(directory.join(".gitignore"), "ignored.md\n")
-        .expect("gitignore should be written");
+    fs::write(directory.join(".gitignore"), "ignored.md\n").expect("gitignore should be written");
     fs::write(directory.join("file1.md"), "one").expect("file should be written");
     fs::write(directory.join("ignored.md"), "two").expect("file should be written");
     let output_dir = temp.path().join("out");
@@ -574,8 +572,8 @@ fn respects_gitignore_when_flag_passed() {
 
     // file1.md + the .gitignore file itself (dotfiles still slop by
     // default); ignored.md is pruned because .gitignore lists it.
-    let slop = fs::read_to_string(output_dir.join("file1_gitignore.md"))
-        .expect("slop file should exist");
+    let slop =
+        fs::read_to_string(output_dir.join("file1_gitignore.md")).expect("slop file should exist");
     assert!(slop.contains("one"));
     assert!(!slop.contains("two"));
 }
@@ -585,8 +583,7 @@ fn ignores_gitignore_contents_without_flag() {
     let temp = tempdir().expect("tempdir should exist");
     let directory = temp.path().join("folder1");
     fs::create_dir_all(&directory).expect("directory should be created");
-    fs::write(directory.join(".gitignore"), "ignored.md\n")
-        .expect("gitignore should be written");
+    fs::write(directory.join(".gitignore"), "ignored.md\n").expect("gitignore should be written");
     fs::write(directory.join("file1.md"), "one").expect("file should be written");
     fs::write(directory.join("ignored.md"), "two").expect("file should be written");
     let output_dir = temp.path().join("out");
@@ -620,8 +617,7 @@ fn respect_gitignore_config_default_enables_pruning_without_flag() {
 
     let directory = temp.path().join("folder1");
     fs::create_dir_all(&directory).expect("directory should be created");
-    fs::write(directory.join(".gitignore"), "ignored.md\n")
-        .expect("gitignore should be written");
+    fs::write(directory.join(".gitignore"), "ignored.md\n").expect("gitignore should be written");
     fs::write(directory.join("file1.md"), "one").expect("file should be written");
     fs::write(directory.join("ignored.md"), "two").expect("file should be written");
     let output_dir = temp.path().join("out");
@@ -635,8 +631,8 @@ fn respect_gitignore_config_default_enables_pruning_without_flag() {
         .assert()
         .success();
 
-    let slop = fs::read_to_string(output_dir.join("file1_gitignore.md"))
-        .expect("slop file should exist");
+    let slop =
+        fs::read_to_string(output_dir.join("file1_gitignore.md")).expect("slop file should exist");
     assert!(slop.contains("one"));
     assert!(!slop.contains("two"));
 }

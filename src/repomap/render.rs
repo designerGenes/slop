@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use super::graph::{DependencyEdge, FileMetrics, RankedTag, MAX_REPORTED_CYCLE};
+use super::graph::{DependencyEdge, FileMetrics, MAX_REPORTED_CYCLE, RankedTag};
 use super::manifest::{self, Manifest};
 
 /// Legend emitted once, so the consuming agent can read the rest without
@@ -104,12 +104,7 @@ pub fn render_structure(
                 out.push_str(&format!(
                     "  cycle: {} files mutually dependent, e.g. {}, ...\n",
                     cycle.len(),
-                    cycle
-                        .iter()
-                        .take(4)
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    cycle.iter().take(4).cloned().collect::<Vec<_>>().join(", ")
                 ));
             } else {
                 out.push_str(&format!("  cycle: {}\n", cycle.join(" <-> ")));
@@ -152,7 +147,10 @@ pub fn render_symbols(
 
     let mut file_tags: BTreeMap<String, Vec<&RankedTag>> = BTreeMap::new();
     for rt in ranked_tags {
-        file_tags.entry(rt.tag.rel_fname.clone()).or_default().push(rt);
+        file_tags
+            .entry(rt.tag.rel_fname.clone())
+            .or_default()
+            .push(rt);
     }
 
     let mut sorted_files: Vec<(String, Vec<&RankedTag>)> = file_tags.into_iter().collect();
@@ -171,7 +169,12 @@ pub fn render_symbols(
         let header = match metrics_by_file.get(rel_fname) {
             Some(m) => format!(
                 "\n{} (rank {:.4}, Ca {}, Ce {}, I {:.2}, risk {})\n",
-                rel_fname, m.rank, m.afferent, m.efferent, m.instability, m.risk()
+                rel_fname,
+                m.rank,
+                m.afferent,
+                m.efferent,
+                m.instability,
+                m.risk()
             ),
             None => format!("\n{rel_fname}\n"),
         };
@@ -197,12 +200,18 @@ pub fn render_symbols(
     out
 }
 
-pub fn build_line_cache(root: &Path, rel_fnames: &BTreeSet<String>) -> BTreeMap<String, Vec<String>> {
+pub fn build_line_cache(
+    root: &Path,
+    rel_fnames: &BTreeSet<String>,
+) -> BTreeMap<String, Vec<String>> {
     rel_fnames
         .iter()
         .map(|rel| {
             let contents = std::fs::read_to_string(root.join(rel)).unwrap_or_default();
-            (rel.clone(), contents.lines().map(ToString::to_string).collect())
+            (
+                rel.clone(),
+                contents.lines().map(ToString::to_string).collect(),
+            )
         })
         .collect()
 }
@@ -251,7 +260,6 @@ fn estimate_tokens(text: &str) -> usize {
     (text.len() / 4).max(1)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,7 +268,11 @@ mod tests {
     use crate::repomap::tags::{Tag, TagKind};
 
     fn metric(name: &str, rank: f64, ca: usize, ce: usize) -> FileMetrics {
-        let instability = if ca + ce == 0 { 1.0 } else { ce as f64 / (ca + ce) as f64 };
+        let instability = if ca + ce == 0 {
+            1.0
+        } else {
+            ce as f64 / (ca + ce) as f64
+        };
         FileMetrics {
             rel_fname: name.into(),
             rank,

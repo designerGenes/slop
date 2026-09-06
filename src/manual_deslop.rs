@@ -249,7 +249,7 @@ fn apply_key(buffer: &mut EditorBuffer, key: KeyEvent) -> EditorAction {
 mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    use super::{apply_key, EditorAction, EditorBuffer};
+    use super::{EditorAction, EditorBuffer, apply_key};
 
     #[test]
     fn arrow_keys_move_within_and_between_lines() {

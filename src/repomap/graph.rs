@@ -437,7 +437,8 @@ fn strongly_connected_components(
     edge_weights: &BTreeMap<(String, String), f64>,
 ) -> Vec<Vec<String>> {
     let nodes: Vec<String> = all_nodes.iter().cloned().collect();
-    let index_of: BTreeMap<&String, usize> = nodes.iter().enumerate().map(|(i, n)| (n, i)).collect();
+    let index_of: BTreeMap<&String, usize> =
+        nodes.iter().enumerate().map(|(i, n)| (n, i)).collect();
 
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
     for (src, dst) in edge_weights.keys() {
@@ -523,7 +524,8 @@ fn articulation_points(
     edge_weights: &BTreeMap<(String, String), f64>,
 ) -> Vec<String> {
     let nodes: Vec<String> = all_nodes.iter().cloned().collect();
-    let index_of: BTreeMap<&String, usize> = nodes.iter().enumerate().map(|(i, n)| (n, i)).collect();
+    let index_of: BTreeMap<&String, usize> =
+        nodes.iter().enumerate().map(|(i, n)| (n, i)).collect();
     let n = nodes.len();
 
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
@@ -591,7 +593,10 @@ fn articulation_points(
         }
     }
 
-    let mut out: Vec<String> = (0..n).filter(|&i| is_ap[i]).map(|i| nodes[i].clone()).collect();
+    let mut out: Vec<String> = (0..n)
+        .filter(|&i| is_ap[i])
+        .map(|i| nodes[i].clone())
+        .collect();
     out.sort();
     out
 }
@@ -602,13 +607,25 @@ mod tests {
     use crate::repomap::tags::{Tag, TagKind};
 
     fn def(file: &str, line: usize, name: &str) -> Tag {
-        Tag { rel_fname: file.into(), line, name: name.into(), kind: TagKind::Def }
+        Tag {
+            rel_fname: file.into(),
+            line,
+            name: name.into(),
+            kind: TagKind::Def,
+        }
     }
     fn r#ref(file: &str, line: usize, name: &str) -> Tag {
-        Tag { rel_fname: file.into(), line, name: name.into(), kind: TagKind::Ref }
+        Tag {
+            rel_fname: file.into(),
+            line,
+            name: name.into(),
+            kind: TagKind::Ref,
+        }
     }
 
-    fn empty() -> HashSet<String> { HashSet::new() }
+    fn empty() -> HashSet<String> {
+        HashSet::new()
+    }
 
     #[test]
     fn symbols_in_one_file_no_longer_tie() {
@@ -654,7 +671,12 @@ mod tests {
         ];
         let analysis = analyze(&tags, &empty(), &empty(), &empty());
         let by = |n: &str| {
-            analysis.metrics.iter().find(|m| m.rel_fname == n).expect(n).clone()
+            analysis
+                .metrics
+                .iter()
+                .find(|m| m.rel_fname == n)
+                .expect(n)
+                .clone()
         };
 
         let error = by("error.rs");
@@ -681,7 +703,10 @@ mod tests {
         ];
         let analysis = analyze(&tags, &empty(), &empty(), &empty());
         assert_eq!(analysis.cycles.len(), 1);
-        assert_eq!(analysis.cycles[0], vec!["a.rs".to_string(), "b.rs".to_string()]);
+        assert_eq!(
+            analysis.cycles[0],
+            vec!["a.rs".to_string(), "b.rs".to_string()]
+        );
     }
 
     #[test]
@@ -691,7 +716,11 @@ mod tests {
             def("leaf.rs", 1, "leaf_fn"),
             r#ref("leaf.rs", 2, "core_fn"),
         ];
-        assert!(analyze(&tags, &empty(), &empty(), &empty()).cycles.is_empty());
+        assert!(
+            analyze(&tags, &empty(), &empty(), &empty())
+                .cycles
+                .is_empty()
+        );
     }
 
     #[test]

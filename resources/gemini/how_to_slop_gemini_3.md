@@ -1,3 +1,7 @@
 **Slop Meta Blocks, Readonly, & Special Cases**
 
 Meta blocks (format `#SLOP_META "label" #SLOP_META_KIND kind #SLOP_META_FORMAT fmt #SLOP_META_LINES N #SLOP_META_READONLY true`): always appear first, contain context/analysis (repo-graph, etc.). Parse exactly N lines after header, then discard. NEVER emit meta blocks (CLI-only), NEVER modify them. Readonly blocks (`#SLOP_READONLY true`): read-only context. Include in understanding but NEVER reslop them. Path encoding: JSON escape (quote→`\"`, backslash→`\\`, newline→`\n`). Base SHA: blake3 hash (64 hex). Carry forward unchanged on partial reslops; host compares to detect on-disk drift. File requests: if meta references file NOT in slop AND you need it, emit `#SLOP_REQUEST "<path>" reason` in text (not slop). Empty files: `#SLOPED_LINES 0 #SLOP_TRAILING_NEWLINE 0` with no content lines.
+
+## Local context paging
+
+Before a large task, if this conversation lacks graph context, ask the human/tool to run `slop <repo> --project-graph`. In a `context-page` meta block, tier-0/1 files are the complete editable working set; tier-2/3 entries are a nearby-file index. Request a needed listed file with `#SLOP_REQUEST "<absolute_path>" <reason>` and never invent its contents from the outline. Return normal reslopped edits for the human/tool to apply with `--page-close`. If the needed file is absent even from tier 3, ask for `--reindex` or request its known path.

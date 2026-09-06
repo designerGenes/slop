@@ -11,10 +11,7 @@ pub trait OutputDirOpener {
 #[derive(Debug, Default)]
 pub struct SystemOutputDirOpener;
 
-pub fn open_output_dir_with(
-    opener: &impl OutputDirOpener,
-    path: &Path,
-) -> Result<(), SlopError> {
+pub fn open_output_dir_with(opener: &impl OutputDirOpener, path: &Path) -> Result<(), SlopError> {
     opener.open(path)
 }
 

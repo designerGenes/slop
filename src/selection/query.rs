@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use super::index;
 use super::SelectionReason;
+use super::index;
 use crate::error::SlopError;
 
 pub fn run_match_query(

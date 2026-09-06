@@ -162,10 +162,7 @@ pub fn extract_tags(fname: &str, rel_fname: &str) -> Vec<Tag> {
         let mut name_node = None;
 
         for cap in m.captures {
-            let cap_name = capture_names
-                .get(cap.index as usize)
-                .copied()
-                .unwrap_or("");
+            let cap_name = capture_names.get(cap.index as usize).copied().unwrap_or("");
 
             if cap_name.starts_with("definition.") {
                 kind = Some(TagKind::Def);
@@ -178,17 +175,14 @@ pub fn extract_tags(fname: &str, rel_fname: &str) -> Vec<Tag> {
 
         if let (Some(kind), Some(node)) = (kind, name_node) {
             let line = node.start_position().row + 1;
-            let name = node
-                .utf8_text(source.as_bytes())
-                .unwrap_or("")
-                .to_string();
+            let name = node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
 
-        tags.push(Tag {
-            rel_fname: rel_fname.to_string(),
-            line,
-            name,
-            kind,
-        });
+            tags.push(Tag {
+                rel_fname: rel_fname.to_string(),
+                line,
+                name,
+                kind,
+            });
         }
     }
 
@@ -197,7 +191,7 @@ pub fn extract_tags(fname: &str, rel_fname: &str) -> Vec<Tag> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_tags, TagKind};
+    use super::{TagKind, extract_tags};
     use std::io::Write;
 
     fn write_temp(name: &str, contents: &str) -> (String, std::path::PathBuf) {
