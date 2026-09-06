@@ -34,11 +34,6 @@ fn open(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
     let (root, seeds) = resolve_tower_seeds(args, config)?;
     let tower = graphstore::refresh_tower_graph(&root, &seeds, config, args.reindex)?;
     let now = now_unix();
-    let page_id = format!(
-        "{:013x}-{}",
-        now * 1_000,
-        &blake3::hash(format!("{}:{:?}", root.display(), seeds).as_bytes()).to_hex()[..8]
-    );
     let mut files = Vec::new();
     let mut states = Vec::new();
     for member in &tower.members {
@@ -54,7 +49,8 @@ fn open(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
             files.push(source);
         }
     }
-    files = crate::secrets::enforce(&files, config, false, false)?;
+    files = crate::secrets::enforce(&files, config, args.allow_secrets, args.redact)?;
+    let page_id = allocate_page_id(config, &tower.repo_id, &root, &seeds)?;
     let manifest = PageManifest {
         schema: PAGE_SCHEMA,
         page_id: page_id.clone(),
@@ -144,8 +140,12 @@ fn add(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
             continue;
         }
         let source = build_source_file(&path)?;
-        let mut checked =
-            crate::secrets::enforce(std::slice::from_ref(&source), config, false, false)?;
+        let mut checked = crate::secrets::enforce(
+            std::slice::from_ref(&source),
+            config,
+            args.allow_secrets,
+            args.redact,
+        )?;
         let source = checked
             .pop()
             .expect("one source remains after secret enforcement");
@@ -198,6 +198,7 @@ fn close(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
         .map(|file| normalize_path(&root.join(&file.rel)))
         .collect();
     let returned = page::page_dir(config, &repo_id, &manifest.page_id).join("returned");
+    let mut documents = Vec::new();
     if let Ok(entries) = fs::read_dir(returned) {
         for entry in entries.filter_map(Result::ok) {
             let content =
@@ -215,8 +216,11 @@ fn close(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
                     });
                 }
             }
-            crate::deslop::apply_document(document, args, config, Some(&allowed))?;
+            documents.push(document);
         }
+    }
+    for document in documents {
+        crate::deslop::apply_document(document, args, config, Some(&allowed))?;
     }
     let (_, report) = graphstore::refresh_project_graph(&root, config, false)?;
     manifest.status = PageStatus::Closed;
@@ -385,6 +389,41 @@ fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+/// Allocate the page directory as part of id creation. The exclusive directory
+/// creation makes concurrent opens with identical seeds unable to overwrite one
+/// another, while the millisecond prefix keeps page ids chronologically sorted.
+fn allocate_page_id(
+    config: &Config,
+    repo_id: &str,
+    root: &std::path::Path,
+    seeds: &[String],
+) -> Result<String, SlopError> {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let suffix = &blake3::hash(format!("{}:{seeds:?}", root.display()).as_bytes()).to_hex()[..8];
+    let parent = page::pages_dir(config).join(repo_id);
+    fs::create_dir_all(&parent).map_err(|source| SlopError::DirectoryCreationFailure {
+        path: parent.clone(),
+        source,
+    })?;
+    for sequence in 0_u64.. {
+        let page_id = if sequence == 0 {
+            format!("{millis:013x}-{suffix}")
+        } else {
+            format!("{millis:013x}-{suffix}-{sequence}")
+        };
+        let path = parent.join(&page_id);
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(page_id),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(source) => return Err(SlopError::DirectoryCreationFailure { path, source }),
+        }
+    }
+    unreachable!("unbounded page id sequence")
 }
 fn parse_duration(raw: &str) -> Result<u64, SlopError> {
     let (number, unit) = raw.split_at(raw.len().saturating_sub(1));

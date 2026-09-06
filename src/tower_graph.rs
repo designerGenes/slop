@@ -55,7 +55,7 @@ pub fn resolve_tower_seeds(
         &inputs,
         max_depth,
         &[],
-        should_respect_gitignore(false, config),
+        should_respect_gitignore(args.respect_gitignore, config),
         false,
     )?;
     let (project, _) = graphstore::refresh_project_graph(&repo_root, config, args.reindex)?;

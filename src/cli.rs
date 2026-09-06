@@ -136,6 +136,12 @@ where
     if args.tower_graph {
         validate_tower_graph_options(&args)?;
     }
+    if args.page_open {
+        validate_page_open_options(&args)?;
+    }
+    if args.page_add {
+        validate_page_add_options(&args)?;
+    }
 
     Ok(args)
 }
@@ -279,6 +285,117 @@ fn validate_tower_graph_options(args: &CliArgs) -> Result<(), SlopError> {
     } else {
         Err(SlopError::InvalidCliUsage(format!(
             "--tower-graph builds a relevance graph and bundles nothing, so it cannot use: {}",
+            unsupported.join(", ")
+        )))
+    }
+}
+
+fn validate_page_open_options(args: &CliArgs) -> Result<(), SlopError> {
+    let mut unsupported = Vec::new();
+    if !args.matches.is_empty() {
+        unsupported.push("--match");
+    }
+    if !args.seeds.is_empty() {
+        unsupported.push("--seed");
+    }
+    if !args.symbols.is_empty() {
+        unsupported.push("--symbol");
+    }
+    if args.hops.is_some() {
+        unsupported.push("--hops");
+    }
+    if args.top_k.is_some() {
+        unsupported.push("--top-k");
+    }
+    if args.explain_selection {
+        unsupported.push("--explain-selection");
+    }
+    if !args.context_files.is_empty() {
+        unsupported.push("--context-file");
+    }
+    if !args.exclude.is_empty() {
+        unsupported.push("-x/--exclude");
+    }
+    if args.include_graph {
+        unsupported.push("-g/--include-graph");
+    }
+    if args.max_slop_bytes.is_some() {
+        unsupported.push("--max-slop-bytes");
+    }
+    if args.dry_run {
+        unsupported.push("--dry-run");
+    }
+    if !args.allow_roots.is_empty() {
+        unsupported.push("--allow-root");
+    }
+    if args.output_dir.is_some() || args.slop_to.is_some() {
+        unsupported.push("--output/--slop-to");
+    }
+    if unsupported.is_empty() {
+        Ok(())
+    } else {
+        Err(SlopError::InvalidCliUsage(format!(
+            "--page-open creates a context page, so it cannot use: {}",
+            unsupported.join(", ")
+        )))
+    }
+}
+
+fn validate_page_add_options(args: &CliArgs) -> Result<(), SlopError> {
+    let mut unsupported = Vec::new();
+    if args.recursive {
+        unsupported.push("-r/--recursive");
+    }
+    if args.respect_gitignore {
+        unsupported.push("--respect-gitignore");
+    }
+    if !args.matches.is_empty() {
+        unsupported.push("--match");
+    }
+    if !args.seeds.is_empty() {
+        unsupported.push("--seed");
+    }
+    if !args.symbols.is_empty() {
+        unsupported.push("--symbol");
+    }
+    if args.task.is_some() {
+        unsupported.push("--task");
+    }
+    if args.hops.is_some() {
+        unsupported.push("--hops");
+    }
+    if args.top_k.is_some() {
+        unsupported.push("--top-k");
+    }
+    if args.explain_selection {
+        unsupported.push("--explain-selection");
+    }
+    if !args.context_files.is_empty() {
+        unsupported.push("--context-file");
+    }
+    if !args.exclude.is_empty() {
+        unsupported.push("-x/--exclude");
+    }
+    if args.include_graph {
+        unsupported.push("-g/--include-graph");
+    }
+    if args.max_slop_bytes.is_some() {
+        unsupported.push("--max-slop-bytes");
+    }
+    if args.dry_run {
+        unsupported.push("--dry-run");
+    }
+    if !args.allow_roots.is_empty() {
+        unsupported.push("--allow-root");
+    }
+    if args.output_dir.is_some() || args.slop_to.is_some() {
+        unsupported.push("--output/--slop-to");
+    }
+    if unsupported.is_empty() {
+        Ok(())
+    } else {
+        Err(SlopError::InvalidCliUsage(format!(
+            "--page-add extends a context page, so it cannot use: {}",
             unsupported.join(", ")
         )))
     }
