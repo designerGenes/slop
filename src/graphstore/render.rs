@@ -385,6 +385,8 @@ mod tests {
                 internal_weight: 8.0,
                 external_weight: 2.0,
             }],
+            community_couplings: Vec::new(),
+            directory_couplings: Vec::new(),
             structure: Structure {
                 cycles: Vec::new(),
                 chokepoints: vec!["src/a.rs".to_string()],

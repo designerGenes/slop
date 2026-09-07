@@ -15,6 +15,9 @@ pub struct CliArgs {
     /// bundle nothing. See `crate::project_graph`.
     pub project_graph: bool,
     pub tower_graph: bool,
+    /// Repeat for each file whose tier should be reported for the supplied
+    /// tower seeds. This is an exclusive diagnostic mode.
+    pub tier_recall: Vec<PathBuf>,
     pub page_open: bool,
     pub page_add: bool,
     pub page_add_create: bool,

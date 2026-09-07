@@ -54,9 +54,17 @@ pub struct Config {
     pub tower_rwr_iterations: usize,
     pub tower_rwr_epsilon: f64,
     pub tower_community_bonus: f64,
+    /// Exponent used to damp symbol edges attached to high-degree files.
+    pub tower_symbol_hub_damping_exponent: f64,
     pub tower_tier1_mass_fraction: f64,
     pub tower_tier2_mass_fraction: f64,
     pub tower_tier3_min_score: f64,
+    /// Promote a structural hub when it couples to this fraction of the seed
+    /// community, even when its RWR score is suppressed by hub damping.
+    pub tower_structural_hub_min_fraction: f64,
+    /// A single relationship is not aggregate evidence, regardless of a tiny
+    /// community's fraction. Require at least this many distinct members.
+    pub tower_structural_hub_min_links: usize,
     pub pages_dir: Option<PathBuf>,
     pub page_prune_after: String,
     pub page_tier1_include: bool,
@@ -103,9 +111,12 @@ impl Default for Config {
             tower_rwr_iterations: 30,
             tower_rwr_epsilon: 1e-9,
             tower_community_bonus: 0.5,
+            tower_symbol_hub_damping_exponent: 0.5,
             tower_tier1_mass_fraction: 0.60,
             tower_tier2_mass_fraction: 0.85,
             tower_tier3_min_score: 1e-6,
+            tower_structural_hub_min_fraction: 0.05,
+            tower_structural_hub_min_links: 2,
             pages_dir: None,
             page_prune_after: "7d".to_string(),
             page_tier1_include: true,
@@ -228,10 +239,15 @@ pub fn default_config_yaml() -> String {
          tower_restart_alpha: {tower_restart_alpha}\n\
          tower_rwr_iterations: {tower_rwr_iterations}\n\
          tower_rwr_epsilon: {tower_rwr_epsilon}\n\
-         tower_community_bonus: {tower_community_bonus}\n\
+          tower_community_bonus: {tower_community_bonus}\n\
+          # Symbol-edge hub damping (0.5 = square root; lower keeps more dispatcher signal).\n\
+          tower_symbol_hub_damping_exponent: {tower_symbol_hub_damping_exponent}\n\
          tower_tier1_mass_fraction: {tower_tier1_mass_fraction}\n\
          tower_tier2_mass_fraction: {tower_tier2_mass_fraction}\n\
-         tower_tier3_min_score: {tower_tier3_min_score}\n\n\
+          tower_tier3_min_score: {tower_tier3_min_score}\n\
+          # Post-RWR promotion for dispatch/registry hubs linked across a seed module.\n\
+          tower_structural_hub_min_fraction: {tower_structural_hub_min_fraction}\n\
+          tower_structural_hub_min_links: {tower_structural_hub_min_links}\n\n\
          # Context-page state is durable agent work, not cache data.\n\
          pages_dir: {pages_dir}\n\
          page_prune_after: {page_prune_after}\n\
@@ -282,9 +298,12 @@ pub fn default_config_yaml() -> String {
         tower_rwr_iterations = 30,
         tower_rwr_epsilon = 1e-9,
         tower_community_bonus = 0.5,
+        tower_symbol_hub_damping_exponent = 0.5,
         tower_tier1_mass_fraction = 0.60,
         tower_tier2_mass_fraction = 0.85,
         tower_tier3_min_score = 1e-6,
+        tower_structural_hub_min_fraction = 0.05,
+        tower_structural_hub_min_links = 2,
         pages_dir = "~/.slop/pages",
         page_prune_after = "7d",
         page_tier1_include = true,
@@ -432,6 +451,9 @@ mod tests {
         assert_eq!(config.graph_map_tokens, 2048);
         assert_eq!(config.graph_format, "repomap");
         assert!(config.graph_force_include_supertypes);
+        assert_eq!(config.tower_symbol_hub_damping_exponent, 0.5);
+        assert_eq!(config.tower_structural_hub_min_fraction, 0.05);
+        assert_eq!(config.tower_structural_hub_min_links, 2);
     }
 
     #[test]
@@ -449,6 +471,9 @@ mod tests {
         assert!(yaml.contains("graph_format:"));
         assert!(yaml.contains("graph_force_include_supertypes:"));
         assert!(yaml.contains("secret_scan:"));
+        assert!(yaml.contains("tower_symbol_hub_damping_exponent:"));
+        assert!(yaml.contains("tower_structural_hub_min_fraction:"));
+        assert!(yaml.contains("tower_structural_hub_min_links:"));
         assert!(yaml.contains("verbose_output:"));
         assert!(yaml.contains("deslop_cache:"));
         assert!(yaml.contains("deslop_cache_path:"));

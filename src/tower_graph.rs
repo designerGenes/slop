@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -115,6 +115,78 @@ pub fn run_tower_graph(args: &CliArgs, config: &Config) -> Result<Vec<PathBuf>, 
     Ok(vec![path])
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TierRecall {
+    pub rel: String,
+    pub tier: Option<Tier>,
+}
+
+/// Score known task files against a tower without involving an agent or
+/// serializing a context page. Positional inputs are the seeds; --tier-recall
+/// paths are the expected files.
+pub fn run_tier_recall(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
+    let (root, seeds) = resolve_tower_seeds(args, config)?;
+    let project = graphstore::load_project_graph(&root, config).ok_or_else(|| {
+        SlopError::GraphStoreFailure(format!("project graph disappeared for {}", root.display()))
+    })?;
+    let tower = graphstore::build_tower_graph(&project, &seeds, config);
+    let cwd = std::env::current_dir().map_err(|source| SlopError::FileReadFailure {
+        path: PathBuf::from("."),
+        source,
+    })?;
+    let mut targets = Vec::with_capacity(args.tier_recall.len());
+    for target in &args.tier_recall {
+        let target = resolve_absolute(target, &cwd)?;
+        let rel = target
+            .strip_prefix(&root)
+            .map_err(|_| SlopError::TierRecallTargetOutsideRepo(target.clone()))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        targets.push(rel);
+    }
+    let rows = score_tier_recall(&tower, &targets);
+    let tier_one_or_better = rows
+        .iter()
+        .filter(|row| row.tier.is_some_and(|tier| tier <= Tier::One))
+        .count();
+    println!("path\ttier");
+    for row in &rows {
+        println!("{}\t{}", row.rel, tier_label(row.tier));
+    }
+    eprintln!(
+        "tier recall: {tier_one_or_better}/{} targets reached tier 0/1",
+        rows.len()
+    );
+    Ok(())
+}
+
+pub fn score_tier_recall(tower: &TowerGraph, targets: &[String]) -> Vec<TierRecall> {
+    let tiers: BTreeMap<&str, Tier> = tower
+        .members
+        .iter()
+        .map(|member| (member.rel.as_str(), member.tier))
+        .collect();
+    let mut rows: Vec<TierRecall> = targets
+        .iter()
+        .map(|rel| TierRecall {
+            rel: rel.clone(),
+            tier: tiers.get(rel.as_str()).copied(),
+        })
+        .collect();
+    rows.sort_by(|left, right| left.rel.cmp(&right.rel));
+    rows
+}
+
+fn tier_label(tier: Option<Tier>) -> &'static str {
+    match tier {
+        Some(Tier::Zero) => "tier-0",
+        Some(Tier::One) => "tier-1",
+        Some(Tier::Two) => "tier-2",
+        Some(Tier::Three) => "tier-3",
+        None => "absent",
+    }
+}
+
 fn print_summary(tower: &TowerGraph) {
     let count = |tier| {
         tower
@@ -137,5 +209,49 @@ fn print_summary(tower: &TowerGraph) {
         .take(3)
     {
         eprintln!("  {:.6} {}", member.score, member.rel);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tier_recall_reports_tiers_and_absent_targets_in_path_order() {
+        let tower = TowerGraph {
+            schema: 1,
+            repo_id: "repo".to_string(),
+            seed_digest: "seed".to_string(),
+            seeds: vec!["src/rule.rs".to_string()],
+            project_graph_fingerprint: "graph".to_string(),
+            ranking_fingerprint: "ranking".to_string(),
+            generated_at_unix: 0,
+            members: vec![
+                crate::graphstore::TowerMember {
+                    rel: "src/rule.rs".to_string(),
+                    tier: Tier::Zero,
+                    score: 1.0,
+                    via: Vec::new(),
+                },
+                crate::graphstore::TowerMember {
+                    rel: "src/dispatcher.rs".to_string(),
+                    tier: Tier::One,
+                    score: 0.1,
+                    via: vec!["src/rule.rs".to_string()],
+                },
+            ],
+            cut_scores: [0.0; 3],
+        };
+        let rows = score_tier_recall(
+            &tower,
+            &[
+                "src/missing.rs".to_string(),
+                "src/dispatcher.rs".to_string(),
+            ],
+        );
+        assert_eq!(rows[0].rel, "src/dispatcher.rs");
+        assert_eq!(rows[0].tier, Some(Tier::One));
+        assert_eq!(rows[1].rel, "src/missing.rs");
+        assert_eq!(rows[1].tier, None);
     }
 }

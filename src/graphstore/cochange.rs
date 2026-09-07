@@ -55,7 +55,12 @@ impl Default for CoChangeOptions {
 }
 
 pub struct CoChangeResult {
+    /// Edges meeting the normal minimum-commits threshold, used by ordinary
+    /// graph ranking and clustering.
     pub edges: Vec<CoChangeEdge>,
+    /// Every non-sweep pair seen at least once. This remains build-local and is
+    /// aggregated into compact community coupling counts before persistence.
+    pub raw_edges: Vec<CoChangeEdge>,
     pub commits_scanned: usize,
 }
 
@@ -71,6 +76,7 @@ pub fn mine(
 ) -> CoChangeResult {
     let empty = CoChangeResult {
         edges: Vec::new(),
+        raw_edges: Vec::new(),
         commits_scanned: 0,
     };
 
@@ -120,9 +126,8 @@ pub fn mine(
         }
     }
 
-    let mut edges: Vec<CoChangeEdge> = pair_commits
+    let raw_edges: Vec<CoChangeEdge> = pair_commits
         .into_iter()
-        .filter(|(_, commits)| *commits >= options.min_commits.max(1))
         .map(|((a, b), commits)| {
             let weight = pair_weight
                 .get(&(a.clone(), b.clone()))
@@ -137,6 +142,12 @@ pub fn mine(
         })
         .collect();
 
+    let mut edges: Vec<CoChangeEdge> = raw_edges
+        .iter()
+        .filter(|edge| edge.commits >= options.min_commits.max(1))
+        .cloned()
+        .collect();
+
     edges.sort_by(|left, right| {
         right
             .weight
@@ -149,6 +160,7 @@ pub fn mine(
 
     CoChangeResult {
         edges,
+        raw_edges,
         commits_scanned,
     }
 }

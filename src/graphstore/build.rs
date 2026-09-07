@@ -22,8 +22,8 @@ use crate::repomap::tags;
 use super::cochange::{self, CoChangeOptions};
 use super::community::{UndirectedGraph, louvain, modularity};
 use super::model::{
-    BuildReport, CoChangeEdge, Community, FileEntry, GraphStats, PROJECT_GRAPH_SCHEMA,
-    ProjectGraph, StoredTag, Structure, SymbolEdge,
+    BuildReport, CoChangeEdge, Community, CommunityCoupling, DirectoryCoupling, FileEntry,
+    GraphStats, PROJECT_GRAPH_SCHEMA, ProjectGraph, StoredTag, Structure, SymbolEdge,
 };
 use super::store;
 
@@ -181,6 +181,9 @@ pub fn build_project_graph(
         options,
         &mut modularity_score,
     );
+    let community_couplings =
+        derive_community_couplings(&entries, &symbol_edges, &cochange_result.raw_edges);
+    let directory_couplings = derive_directory_couplings(&symbol_edges, &cochange_result.raw_edges);
 
     let generated_at_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -208,6 +211,8 @@ pub fn build_project_graph(
         symbol_edges,
         cochange_edges: cochange_result.edges,
         communities,
+        community_couplings,
+        directory_couplings,
         structure: Structure {
             cycles: analysis.cycles.clone(),
             chokepoints: analysis.chokepoints.clone(),
@@ -218,6 +223,85 @@ pub fn build_project_graph(
 
     report.elapsed_ms = started.elapsed().as_millis();
     Ok((graph, report))
+}
+
+/// Collapse low-confidence pairwise history into robust aggregate evidence.
+/// A one-off pair is noise for normal ranking, but a file that has one-off
+/// relationships with many files in the seed's community is a structural hub.
+fn derive_community_couplings(
+    entries: &[FileEntry],
+    symbol_edges: &[SymbolEdge],
+    raw_cochange_edges: &[CoChangeEdge],
+) -> Vec<CommunityCoupling> {
+    let communities: BTreeMap<&str, usize> = entries
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .community
+                .map(|community| (entry.rel.as_str(), community))
+        })
+        .collect();
+    let mut members: BTreeMap<(String, usize), BTreeSet<String>> = BTreeMap::new();
+
+    let mut record = |from: &str, to: &str| {
+        if let Some(&community) = communities.get(from) {
+            members
+                .entry((to.to_string(), community))
+                .or_default()
+                .insert(from.to_string());
+        }
+    };
+    for edge in symbol_edges {
+        record(&edge.from, &edge.to);
+        record(&edge.to, &edge.from);
+    }
+    for edge in raw_cochange_edges {
+        record(&edge.a, &edge.b);
+        record(&edge.b, &edge.a);
+    }
+
+    members
+        .into_iter()
+        .map(|((candidate, community), members)| CommunityCoupling {
+            candidate,
+            community,
+            distinct_members: members.len(),
+        })
+        .collect()
+}
+
+fn derive_directory_couplings(
+    symbol_edges: &[SymbolEdge],
+    raw_cochange_edges: &[CoChangeEdge],
+) -> Vec<DirectoryCoupling> {
+    let mut members: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    let mut record = |from: &str, to: &str| {
+        let directory = parent_directory(from);
+        members
+            .entry((to.to_string(), directory.to_string()))
+            .or_default()
+            .insert(from.to_string());
+    };
+    for edge in symbol_edges {
+        record(&edge.from, &edge.to);
+        record(&edge.to, &edge.from);
+    }
+    for edge in raw_cochange_edges {
+        record(&edge.a, &edge.b);
+        record(&edge.b, &edge.a);
+    }
+    members
+        .into_iter()
+        .map(|((candidate, directory), members)| DirectoryCoupling {
+            candidate,
+            directory,
+            distinct_members: members.len(),
+        })
+        .collect()
+}
+
+fn parent_directory(rel: &str) -> &str {
+    rel.rsplit_once('/').map_or(".", |(directory, _)| directory)
 }
 
 /// Cluster the combined symbol + co-change graph and write the labels back onto
@@ -349,6 +433,22 @@ fn common_prefix(directories: &[&str]) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn entry(rel: &str, community: Option<usize>) -> FileEntry {
+        FileEntry {
+            rel: rel.to_string(),
+            blake3: "0".repeat(64),
+            size: 1,
+            parsed: true,
+            tags: Vec::new(),
+            rank: 0.0,
+            afferent: 0,
+            efferent: 0,
+            instability: 1.0,
+            def_count: 0,
+            community,
+        }
+    }
+
     #[test]
     fn a_shared_directory_names_the_community() {
         let members = vec![
@@ -389,5 +489,58 @@ mod tests {
     fn root_level_files_do_not_produce_an_empty_label() {
         let members = vec!["build.rs".to_string(), "main.rs".to_string()];
         assert_eq!(community_label(&members), ".");
+    }
+
+    #[test]
+    fn community_coupling_retains_one_commit_relationships_as_aggregate_evidence() {
+        let entries = vec![
+            entry("rules/a.rs", Some(0)),
+            entry("rules/b.rs", Some(0)),
+            entry("src/dispatcher.rs", None),
+        ];
+        let raw_cochange = vec![
+            CoChangeEdge {
+                a: "rules/a.rs".to_string(),
+                b: "src/dispatcher.rs".to_string(),
+                commits: 1,
+                weight: 1.0,
+            },
+            CoChangeEdge {
+                a: "rules/b.rs".to_string(),
+                b: "src/dispatcher.rs".to_string(),
+                commits: 1,
+                weight: 1.0,
+            },
+        ];
+        let couplings = derive_community_couplings(&entries, &[], &raw_cochange);
+        assert!(couplings.iter().any(|coupling| {
+            coupling.candidate == "src/dispatcher.rs"
+                && coupling.community == 0
+                && coupling.distinct_members == 2
+        }));
+    }
+
+    #[test]
+    fn directory_coupling_uses_the_seed_files_parent_directory() {
+        let raw_cochange = vec![
+            CoChangeEdge {
+                a: "rules/a.rs".to_string(),
+                b: "src/dispatcher.rs".to_string(),
+                commits: 1,
+                weight: 1.0,
+            },
+            CoChangeEdge {
+                a: "rules/b.rs".to_string(),
+                b: "src/dispatcher.rs".to_string(),
+                commits: 1,
+                weight: 1.0,
+            },
+        ];
+        let couplings = derive_directory_couplings(&[], &raw_cochange);
+        assert!(couplings.iter().any(|coupling| {
+            coupling.candidate == "src/dispatcher.rs"
+                && coupling.directory == "rules"
+                && coupling.distinct_members == 2
+        }));
     }
 }

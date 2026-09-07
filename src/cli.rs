@@ -36,6 +36,10 @@ struct RawCliArgs {
     project_graph: bool,
     #[arg(long = "tower-graph")]
     tower_graph: bool,
+    /// Report the tower tier assigned to this ground-truth file. Repeatable;
+    /// positional inputs remain the tower seeds.
+    #[arg(long = "tier-recall", value_name = "FILE")]
+    tier_recall: Vec<PathBuf>,
     #[arg(long = "page-open")]
     page_open: bool,
     #[arg(long = "page-add")]
@@ -142,6 +146,9 @@ where
     if args.tower_graph {
         validate_tower_graph_options(&args)?;
     }
+    if !args.tier_recall.is_empty() {
+        validate_tier_recall_options(&args)?;
+    }
     if args.page_open {
         validate_page_open_options(&args)?;
     }
@@ -156,6 +163,7 @@ fn validate_process_modes(args: &CliArgs) -> Result<(), SlopError> {
         ("--deslop", args.deslop),
         ("--project-graph", args.project_graph),
         ("--tower-graph", args.tower_graph),
+        ("--tier-recall", !args.tier_recall.is_empty()),
         ("--page-open", args.page_open),
         ("--page-add", args.page_add),
         ("--page-close", args.page_close),
@@ -300,6 +308,28 @@ fn validate_tower_graph_options(args: &CliArgs) -> Result<(), SlopError> {
     } else {
         Err(SlopError::InvalidCliUsage(format!(
             "--tower-graph builds a relevance graph and bundles nothing, so it cannot use: {}",
+            unsupported.join(", ")
+        )))
+    }
+}
+
+fn validate_tier_recall_options(args: &CliArgs) -> Result<(), SlopError> {
+    validate_tower_graph_options(args)?;
+    let mut unsupported = Vec::new();
+    if args.output_dir.is_some() || args.slop_to.is_some() {
+        unsupported.push("--output/--slop-to");
+    }
+    if args.page_id.is_some() {
+        unsupported.push("--page");
+    }
+    if args.older_than.is_some() {
+        unsupported.push("--older-than");
+    }
+    if unsupported.is_empty() {
+        Ok(())
+    } else {
+        Err(SlopError::InvalidCliUsage(format!(
+            "--tier-recall reports tiers and writes no artifact, so it cannot use: {}",
             unsupported.join(", ")
         )))
     }
@@ -501,6 +531,7 @@ fn cli_args_from_raw(parsed: RawCliArgs) -> CliArgs {
         include_graph: parsed.include_graph,
         project_graph: parsed.project_graph,
         tower_graph: parsed.tower_graph,
+        tier_recall: parsed.tier_recall,
         page_open: parsed.page_open,
         page_add: parsed.page_add,
         page_add_create: parsed.page_add_create,
@@ -705,6 +736,27 @@ mod tests {
                 .contains("--tower-graph builds a relevance graph")
         );
         assert!(error.to_string().contains("--match"));
+    }
+
+    #[test]
+    fn tier_recall_uses_inputs_as_seeds_and_accepts_repeated_targets() {
+        let args = parse_cli_args_from([
+            "slop",
+            "--tier-recall",
+            "src/dispatcher.rs",
+            "--tier-recall",
+            "src/registry.rs",
+            "src/rule.rs",
+        ])
+        .expect("tier recall should parse");
+        assert_eq!(args.inputs, vec![std::path::PathBuf::from("src/rule.rs")]);
+        assert_eq!(
+            args.tier_recall,
+            vec![
+                std::path::PathBuf::from("src/dispatcher.rs"),
+                std::path::PathBuf::from("src/registry.rs"),
+            ]
+        );
     }
 
     #[test]

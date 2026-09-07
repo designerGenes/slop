@@ -150,6 +150,8 @@ mod tests {
             symbol_edges: Vec::new(),
             cochange_edges: Vec::new(),
             communities: Vec::new(),
+            community_couplings: Vec::new(),
+            directory_couplings: Vec::new(),
             structure: Structure::default(),
             stats: GraphStats::default(),
         }

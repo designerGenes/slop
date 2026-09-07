@@ -32,7 +32,7 @@ use crate::error::SlopError;
 
 pub use build::{BuildOptions, build_project_graph};
 pub use model::{BuildReport, ProjectGraph};
-pub use tower::{Tier, TowerGraph, TowerMember, build_tower_graph};
+pub use tower::{Tier, TowerGraph, TowerMember, build_tower_graph, ranking_fingerprint};
 
 /// Bring the stored graph for `repo_root` up to date and persist it.
 ///
@@ -77,7 +77,9 @@ pub fn refresh_tower_graph(
     let digest = store::seed_digest(seeds);
     let path = store::tower_graph_path(config, repo_root, &digest);
     if !force_rebuild && let Some(tower) = store::load_tower_graph(&path) {
-        if tower.project_graph_fingerprint == project.fingerprint() {
+        if tower.project_graph_fingerprint == project.fingerprint()
+            && tower.ranking_fingerprint == ranking_fingerprint(config)
+        {
             return Ok(tower);
         }
     }

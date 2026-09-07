@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::repomap::tags::{Tag, TagKind};
 
 /// Bump on any incompatible change to the structures below.
-pub const PROJECT_GRAPH_SCHEMA: u32 = 1;
+pub const PROJECT_GRAPH_SCHEMA: u32 = 3;
 
 /// One definition or reference, cached so an unchanged file is never re-parsed.
 ///
@@ -128,6 +128,30 @@ pub struct Community {
     pub external_weight: f64,
 }
 
+/// Aggregate evidence that `candidate` touches distinct members of a
+/// community. This is calculated from all symbol edges plus every non-sweep
+/// co-change pair, including pairs below the ordinary co-change threshold.
+///
+/// Persisting the count rather than raw git pairs keeps the graph compact while
+/// preserving exactly the signal needed to recover structural hubs at tower
+/// ranking time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommunityCoupling {
+    pub candidate: String,
+    pub community: usize,
+    pub distinct_members: usize,
+}
+
+/// The directory-scoped equivalent of [`CommunityCoupling`]. Louvain clusters
+/// may be intentionally broad in a large repository, while a seed file's
+/// parent directory is a precise and stable local module boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirectoryCoupling {
+    pub candidate: String,
+    pub directory: String,
+    pub distinct_members: usize,
+}
+
 /// Whole-graph shape: the parts that describe risk rather than content.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Structure {
@@ -169,6 +193,8 @@ pub struct ProjectGraph {
     pub symbol_edges: Vec<SymbolEdge>,
     pub cochange_edges: Vec<CoChangeEdge>,
     pub communities: Vec<Community>,
+    pub community_couplings: Vec<CommunityCoupling>,
+    pub directory_couplings: Vec<DirectoryCoupling>,
     pub structure: Structure,
     pub stats: GraphStats,
 }
@@ -176,8 +202,14 @@ pub struct ProjectGraph {
 impl ProjectGraph {
     /// Stable identity of the inputs used by downstream derived graphs.
     pub fn fingerprint(&self) -> String {
-        let encoded = serde_json::to_vec(&(&self.files, &self.symbol_edges, &self.cochange_edges))
-            .expect("project graph fields are serializable");
+        let encoded = serde_json::to_vec(&(
+            &self.files,
+            &self.symbol_edges,
+            &self.cochange_edges,
+            &self.community_couplings,
+            &self.directory_couplings,
+        ))
+        .expect("project graph fields are serializable");
         blake3::hash(&encoded).to_hex().to_string()
     }
 

@@ -131,6 +131,8 @@ pub enum SlopError {
 
     #[error("tower graph seed {0} is outside the repository being graphed")]
     TowerSeedOutsideRepo(PathBuf),
+    #[error("tier recall target {0} is outside the repository being graphed")]
+    TierRecallTargetOutsideRepo(PathBuf),
     #[error("--tower-graph inputs resolved to no files; nothing to seed the tower with")]
     TowerSeedSetEmpty,
     #[error("--tower-graph inputs span more than one repository: {}", format_paths(.0))]

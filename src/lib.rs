@@ -96,6 +96,10 @@ pub fn run_with_opener(
         }
         return Ok(());
     }
+    if !args.tier_recall.is_empty() {
+        tower_graph::run_tier_recall(args, config)?;
+        return Ok(());
+    }
     if args.page_open || args.page_add || args.page_close || args.page_list || args.page_prune {
         page::run(args, config)?;
         return Ok(());

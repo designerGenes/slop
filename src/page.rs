@@ -600,6 +600,7 @@ mod tests {
             seed_digest: "digest".to_string(),
             seeds: vec!["a.rs".to_string()],
             project_graph_fingerprint: "fingerprint".to_string(),
+            ranking_fingerprint: crate::graphstore::ranking_fingerprint(&Config::default()),
             generated_at_unix: 0,
             members: vec![
                 TowerMember {
@@ -633,6 +634,8 @@ mod tests {
             symbol_edges: Vec::new(),
             cochange_edges: Vec::new(),
             communities: Vec::new(),
+            community_couplings: Vec::new(),
+            directory_couplings: Vec::new(),
             structure: Default::default(),
             stats: Default::default(),
         };
