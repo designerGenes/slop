@@ -56,6 +56,9 @@ struct RawCliArgs {
     /// Close a page that has no returned slop documents or direct file edits.
     #[arg(long = "allow-empty")]
     allow_empty_page_close: bool,
+    /// Fail --page-close when direct edits were made outside the page scope.
+    #[arg(long = "strict")]
+    strict_page_close: bool,
     #[arg(long = "page-list")]
     page_list: bool,
     #[arg(long = "page-prune")]
@@ -187,6 +190,11 @@ fn validate_process_modes(args: &CliArgs) -> Result<(), SlopError> {
     if args.allow_empty_page_close && !args.page_close {
         return Err(SlopError::InvalidCliUsage(
             "--allow-empty can only be used with --page-close".to_string(),
+        ));
+    }
+    if args.strict_page_close && !args.page_close {
+        return Err(SlopError::InvalidCliUsage(
+            "--strict can only be used with --page-close".to_string(),
         ));
     }
     if args.page_add_create && !args.page_add {
@@ -547,6 +555,7 @@ fn cli_args_from_raw(parsed: RawCliArgs) -> CliArgs {
         page_add_create: parsed.page_add_create,
         page_close: parsed.page_close,
         allow_empty_page_close: parsed.allow_empty_page_close,
+        strict_page_close: parsed.strict_page_close,
         page_list: parsed.page_list,
         page_prune: parsed.page_prune,
         page_id: parsed.page_id,
@@ -779,6 +788,18 @@ mod tests {
         let error = parse_cli_args_from(["slop", "--manifest", "src/main.rs"])
             .expect_err("manifest without a page must fail");
         assert!(error.to_string().contains("only be used with --page-open"));
+    }
+
+    #[test]
+    fn strict_is_limited_to_page_close() {
+        assert!(
+            parse_cli_args_from(["slop", "--page-close", "--strict"])
+                .expect("strict close should parse")
+                .strict_page_close
+        );
+        let error = parse_cli_args_from(["slop", "--strict", "src/main.rs"])
+            .expect_err("strict outside page close must fail");
+        assert!(error.to_string().contains("only be used with --page-close"));
     }
 
     #[test]

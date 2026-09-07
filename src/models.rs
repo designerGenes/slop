@@ -26,6 +26,9 @@ pub struct CliArgs {
     pub page_add_create: bool,
     pub page_close: bool,
     pub allow_empty_page_close: bool,
+    /// Make direct edits outside page scope fail page-close rather than merely
+    /// being reported as an explicit warning.
+    pub strict_page_close: bool,
     pub page_list: bool,
     pub page_prune: bool,
     pub page_id: Option<String>,

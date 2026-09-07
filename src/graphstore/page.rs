@@ -58,6 +58,10 @@ pub struct PageManifest {
     pub repo_id: String,
     pub repo_root: String,
     pub task: Option<String>,
+    /// HEAD when the page opened. Allows close to notice direct writes that
+    /// were committed before close, not just currently dirty files.
+    #[serde(default)]
+    pub base_git_head: Option<String>,
     pub status: PageStatus,
     pub seed_digest: String,
     pub opened_at_unix: u64,

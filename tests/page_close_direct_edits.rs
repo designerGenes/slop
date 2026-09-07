@@ -87,6 +87,49 @@ fn page_close_records_direct_edits_without_a_returned_document() {
 }
 
 #[test]
+fn strict_close_detects_an_out_of_scope_edit_even_after_it_is_committed() {
+    let _guard = CWD_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let repo = tempfile::tempdir().unwrap();
+    fixture(repo.path());
+    fs::write(repo.path().join("src/outside.rs"), "pub fn outside() {}\n").unwrap();
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-q", "-m", "add outside file"]);
+
+    let state = tempfile::tempdir().unwrap();
+    let config = config(state.path());
+    let original_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(repo.path()).unwrap();
+
+    slop::page::run(&args(&["--page-open", "src/main.rs"]), &config).expect("open");
+    let repo_id = slop::graphstore::store::repo_id(repo.path());
+    let page = open_pages(&config, &repo_id).pop().expect("one open page");
+    assert!(page.files.iter().all(|file| file.rel != "src/outside.rs"));
+
+    fs::write(
+        repo.path().join("src/outside.rs"),
+        "pub fn outside() { println!(\"unregistered\"); }\n",
+    )
+    .unwrap();
+    git(repo.path(), &["add", "src/outside.rs"]);
+    git(repo.path(), &["commit", "-q", "-m", "edit outside page"]);
+
+    let error = slop::page::run(&args(&["--page-close", "--strict"]), &config)
+        .expect_err("strict close must reject an out-of-scope direct edit");
+    assert!(error.to_string().contains("outside its scope"), "{error}");
+    let still_open = load_page(&slop::graphstore::page::manifest_path(
+        &config,
+        &repo_id,
+        &page.page_id,
+    ))
+    .unwrap();
+    assert_eq!(still_open.status, PageStatus::Open);
+
+    std::env::set_current_dir(original_cwd).unwrap();
+}
+
+#[test]
 fn page_close_refuses_an_empty_page_without_override() {
     let _guard = CWD_LOCK
         .lock()

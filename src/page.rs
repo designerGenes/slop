@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
@@ -54,6 +55,7 @@ fn open(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
         repo_id: tower.repo_id.clone(),
         repo_root: root.to_string_lossy().to_string(),
         task: args.task.clone(),
+        base_git_head: git_head(&root),
         status: PageStatus::Open,
         seed_digest: tower.seed_digest.clone(),
         opened_at_unix: now,
@@ -283,6 +285,26 @@ fn close(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
         .map(|file| canonicalize_path(&root.join(&file.rel)))
         .collect();
     let direct_changes = direct_page_changes(&root, &manifest)?;
+    let out_of_scope_changes = direct_out_of_scope_changes(&root, &manifest)?;
+    if !out_of_scope_changes.is_empty() {
+        if args.strict_page_close {
+            return Err(SlopError::PageDirectWritesOutsideScope {
+                page: manifest.page_id.clone(),
+                paths: out_of_scope_changes,
+            });
+        }
+        if !args.silent {
+            eprintln!(
+                "warning: page {} has direct edits outside its scope: {}",
+                manifest.page_id,
+                out_of_scope_changes
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
     let returned = page::page_dir(config, &repo_id, &manifest.page_id).join("returned");
     let mut documents = Vec::new();
     match fs::read_dir(&returned) {
@@ -390,6 +412,66 @@ fn direct_page_changes(
         .collect()
 }
 
+fn direct_out_of_scope_changes(
+    root: &Path,
+    manifest: &PageManifest,
+) -> Result<Vec<PathBuf>, SlopError> {
+    let scoped: BTreeSet<&str> = manifest
+        .files
+        .iter()
+        .map(|file| file.rel.as_str())
+        .collect();
+    let base = manifest.base_git_head.as_deref().unwrap_or("HEAD");
+    let mut changed = git_paths(root, &["diff", "--name-only", "-z", base])?;
+    changed.extend(git_paths(
+        root,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )?);
+    Ok(changed
+        .into_iter()
+        .filter(|rel| !scoped.contains(rel.as_str()))
+        .map(|rel| root.join(rel))
+        .collect())
+}
+
+fn git_head(root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|head| !head.is_empty())
+}
+
+fn git_paths(root: &Path, args: &[&str]) -> Result<BTreeSet<String>, SlopError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .map_err(|error| {
+            SlopError::GraphStoreFailure(format!("git {}: {error}", args.join(" ")))
+        })?;
+    if !output.status.success() {
+        return Err(SlopError::GraphStoreFailure(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(output
+        .stdout
+        .split(|byte| *byte == b'\0')
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8_lossy(path).replace('\\', "/"))
+        .collect())
+}
+
 fn list(config: &Config) -> Result<(), SlopError> {
     let root = page::pages_dir(config);
     let Ok(repos) = fs::read_dir(&root) else {
@@ -483,28 +565,13 @@ fn context_meta(
             ),
             format!("# repo: {}", manifest.repo_root),
             "# delivery: manifest (source is intentionally not preloaded)".to_string(),
-            "# Open a file only when you are about to use it; do not read files speculatively because they appear here.".to_string(),
-            "# Run --page-add before editing a file not already listed in this page scope.".to_string(),
+            "# Read an entry's anchored region first; widen only if it proves insufficient. Do not read files speculatively.".to_string(),
+            "# Batch every known out-of-scope edit into one --page-add path... call. Unregistered edits are reported at close (or rejected by --strict).".to_string(),
             "#".to_string(),
             "# RANKED FILES (page scope):".to_string(),
         ];
         for state in &manifest.files {
-            let defs = project
-                .file(&state.rel)
-                .map(|file| {
-                    file.def_tags()
-                        .take(8)
-                        .map(|tag| tag.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            lines.push(format!(
-                "#   {}   {}   defines: {}",
-                state.rel,
-                tier_label(state.tier),
-                defs
-            ));
+            lines.push(manifest_entry_line(state, tower, project));
         }
         let omitted = tower.members.len().saturating_sub(manifest.files.len());
         lines.push("#".to_string());
@@ -602,6 +669,65 @@ fn context_meta(
     }
 }
 
+fn manifest_entry_line(
+    state: &PageFileState,
+    tower: &graphstore::TowerGraph,
+    project: &graphstore::ProjectGraph,
+) -> String {
+    let member = tower.members.iter().find(|member| member.rel == state.rel);
+    let via = member
+        .map(|member| member.via.as_slice())
+        .unwrap_or_default();
+    let mut idents = BTreeSet::new();
+    for edge in &project.symbol_edges {
+        let connects_via = via.iter().any(|via| {
+            (edge.from == state.rel && edge.to == *via)
+                || (edge.to == state.rel && edge.from == *via)
+        });
+        if connects_via {
+            idents.extend(edge.idents.iter().cloned());
+        }
+    }
+    let mut anchors = Vec::new();
+    if let Some(file) = project.file(&state.rel) {
+        for tag in file.def_tags() {
+            if idents.is_empty() || idents.contains(&tag.name) {
+                anchors.push(tag.line);
+            }
+            if anchors.len() == 3 {
+                break;
+            }
+        }
+    }
+    let via = if via.is_empty() {
+        "seed".to_string()
+    } else {
+        via.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+    };
+    let shares = if idents.is_empty() {
+        "(co-change or no symbol)".to_string()
+    } else {
+        idents.into_iter().take(3).collect::<Vec<_>>().join(", ")
+    };
+    let anchors = if anchors.is_empty() {
+        "(no definition anchor)".to_string()
+    } else {
+        anchors
+            .into_iter()
+            .map(|line| format!("L{line}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "#   {}   {}   via: {}   shares: {}   anchor: {}",
+        state.rel,
+        tier_label(state.tier),
+        via,
+        shares,
+        anchors
+    )
+}
+
 fn tier_label(tier: Tier) -> &'static str {
     match tier {
         Tier::Zero => "tier-0",
@@ -676,6 +802,7 @@ fn parse_duration(raw: &str) -> Result<u64, SlopError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graphstore::model::{FileEntry, GraphStats, StoredTag, Structure, SymbolEdge};
     use crate::graphstore::{TowerGraph, TowerMember};
 
     fn manifest() -> PageManifest {
@@ -685,6 +812,7 @@ mod tests {
             repo_id: "repo".to_string(),
             repo_root: "/repo".to_string(),
             task: None,
+            base_git_head: None,
             status: PageStatus::Open,
             seed_digest: "digest".to_string(),
             opened_at_unix: 0,
@@ -751,6 +879,91 @@ mod tests {
         assert!(meta.readonly);
         assert!(meta.content_lines.iter().any(|line| line.contains("b.rs")));
         assert!(meta.content_lines.iter().any(|line| line.contains("c.rs")));
+    }
+
+    #[test]
+    fn manifest_metadata_includes_via_symbols_and_definition_anchors() {
+        let mut manifest = manifest();
+        manifest.delivery = PageDelivery::Manifest;
+        manifest.files.push(PageFileState {
+            rel: "b.rs".to_string(),
+            tier: Tier::One,
+            base_sha: "1".repeat(64),
+            added_via: PageAddReason::Opened,
+        });
+        let tower = TowerGraph {
+            schema: 2,
+            repo_id: "repo".to_string(),
+            seed_digest: "digest".to_string(),
+            seeds: vec!["a.rs".to_string()],
+            project_graph_fingerprint: "fingerprint".to_string(),
+            ranking_fingerprint: "ranking".to_string(),
+            generated_at_unix: 0,
+            members: vec![
+                TowerMember {
+                    rel: "a.rs".to_string(),
+                    tier: Tier::Zero,
+                    score: 1.0,
+                    via: Vec::new(),
+                },
+                TowerMember {
+                    rel: "b.rs".to_string(),
+                    tier: Tier::One,
+                    score: 0.5,
+                    via: vec!["a.rs".to_string()],
+                },
+            ],
+            cut_scores: [0.0; 3],
+        };
+        let file = |rel: &str, tags| FileEntry {
+            rel: rel.to_string(),
+            blake3: "0".repeat(64),
+            size: 1,
+            parsed: true,
+            tags,
+            rank: 0.0,
+            afferent: 0,
+            efferent: 0,
+            instability: 1.0,
+            def_count: 0,
+            community: None,
+        };
+        let project = crate::graphstore::ProjectGraph {
+            schema: 3,
+            repo_root: "/repo".to_string(),
+            repo_id: "repo".to_string(),
+            generated_at_unix: 0,
+            generator_version: "test".to_string(),
+            files: vec![
+                file("a.rs", vec![]),
+                file(
+                    "b.rs",
+                    vec![StoredTag {
+                        name: "shared".to_string(),
+                        line: 42,
+                        def: true,
+                    }],
+                ),
+            ],
+            symbol_edges: vec![SymbolEdge {
+                from: "b.rs".to_string(),
+                to: "a.rs".to_string(),
+                weight: 1.0,
+                idents: vec!["shared".to_string()],
+            }],
+            cochange_edges: vec![],
+            communities: vec![],
+            community_couplings: vec![],
+            directory_couplings: vec![],
+            structure: Structure::default(),
+            stats: GraphStats::default(),
+        };
+        let rendered = context_meta(&manifest, &tower, &project)
+            .content_lines
+            .join("\n");
+        assert!(rendered.contains("via: a.rs"), "{rendered}");
+        assert!(rendered.contains("shares: shared"), "{rendered}");
+        assert!(rendered.contains("anchor: L42"), "{rendered}");
     }
 
     #[test]

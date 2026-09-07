@@ -153,6 +153,8 @@ pub enum SlopError {
     PageByteBudgetExceeded { actual: usize, cap: usize },
     #[error("returned block for {path} targets a file outside page {page}'s scope")]
     PageWriteOutsideScope { path: PathBuf, page: String },
+    #[error("page {page} has direct edits outside its scope: {}", format_paths(.paths))]
+    PageDirectWritesOutsideScope { page: String, paths: Vec<PathBuf> },
 }
 
 fn format_paths(paths: &[PathBuf]) -> String {
