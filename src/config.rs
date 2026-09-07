@@ -68,6 +68,8 @@ pub struct Config {
     pub pages_dir: Option<PathBuf>,
     pub page_prune_after: String,
     pub page_tier1_include: bool,
+    /// Maximum ranked files recorded in a manifest-delivered context page.
+    pub page_manifest_max_files: usize,
     pub verbose_output: bool,
     pub deslop_cache: bool,
     pub deslop_cache_path: Option<PathBuf>,
@@ -120,6 +122,7 @@ impl Default for Config {
             pages_dir: None,
             page_prune_after: "7d".to_string(),
             page_tier1_include: true,
+            page_manifest_max_files: 32,
             verbose_output: false,
             // Off by default: deslop idempotency now comes from comparing the
             // block against the file on disk, which is exact and stateless.
@@ -251,7 +254,9 @@ pub fn default_config_yaml() -> String {
          # Context-page state is durable agent work, not cache data.\n\
          pages_dir: {pages_dir}\n\
          page_prune_after: {page_prune_after}\n\
-         page_tier1_include: {page_tier1_include}\n\n\
+         page_tier1_include: {page_tier1_include}\n\
+         # Max ranked paths in a manifest-only local context page.\n\
+         page_manifest_max_files: {page_manifest_max_files}\n\n\
          # Print the ignored-file annotations in the slopify tree. Override\n\
          # per-run with --verbose.\n\
          verbose_output: {verbose_output}\n\n\
@@ -307,6 +312,7 @@ pub fn default_config_yaml() -> String {
         pages_dir = "~/.slop/pages",
         page_prune_after = "7d",
         page_tier1_include = true,
+        page_manifest_max_files = 32,
         verbose_output = false,
         deslop_cache = false,
         deslop_cache_path = "~/.slop/.slop_blocks_cache",
@@ -454,6 +460,7 @@ mod tests {
         assert_eq!(config.tower_symbol_hub_damping_exponent, 0.5);
         assert_eq!(config.tower_structural_hub_min_fraction, 0.05);
         assert_eq!(config.tower_structural_hub_min_links, 2);
+        assert_eq!(config.page_manifest_max_files, 32);
     }
 
     #[test]
@@ -474,6 +481,7 @@ mod tests {
         assert!(yaml.contains("tower_symbol_hub_damping_exponent:"));
         assert!(yaml.contains("tower_structural_hub_min_fraction:"));
         assert!(yaml.contains("tower_structural_hub_min_links:"));
+        assert!(yaml.contains("page_manifest_max_files:"));
         assert!(yaml.contains("verbose_output:"));
         assert!(yaml.contains("deslop_cache:"));
         assert!(yaml.contains("deslop_cache_path:"));

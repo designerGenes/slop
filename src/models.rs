@@ -19,6 +19,9 @@ pub struct CliArgs {
     /// tower seeds. This is an exclusive diagnostic mode.
     pub tier_recall: Vec<PathBuf>,
     pub page_open: bool,
+    /// Deliver a bounded ranked manifest instead of source blocks. Local agents
+    /// can read files lazily and add them to the page before editing.
+    pub page_manifest: bool,
     pub page_add: bool,
     pub page_add_create: bool,
     pub page_close: bool,

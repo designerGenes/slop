@@ -42,6 +42,10 @@ struct RawCliArgs {
     tier_recall: Vec<PathBuf>,
     #[arg(long = "page-open")]
     page_open: bool,
+    /// For local tool-using agents: emit a bounded ranked file manifest rather
+    /// than bundling source into the context page.
+    #[arg(long = "manifest")]
+    page_manifest: bool,
     #[arg(long = "page-add")]
     page_add: bool,
     /// Create a missing empty file before adding it to the current page.
@@ -188,6 +192,11 @@ fn validate_process_modes(args: &CliArgs) -> Result<(), SlopError> {
     if args.page_add_create && !args.page_add {
         return Err(SlopError::InvalidCliUsage(
             "--create can only be used with --page-add".to_string(),
+        ));
+    }
+    if args.page_manifest && !args.page_open {
+        return Err(SlopError::InvalidCliUsage(
+            "--manifest can only be used with --page-open".to_string(),
         ));
     }
     Ok(())
@@ -533,6 +542,7 @@ fn cli_args_from_raw(parsed: RawCliArgs) -> CliArgs {
         tower_graph: parsed.tower_graph,
         tier_recall: parsed.tier_recall,
         page_open: parsed.page_open,
+        page_manifest: parsed.page_manifest,
         page_add: parsed.page_add,
         page_add_create: parsed.page_add_create,
         page_close: parsed.page_close,
@@ -757,6 +767,18 @@ mod tests {
                 std::path::PathBuf::from("src/registry.rs"),
             ]
         );
+    }
+
+    #[test]
+    fn manifest_is_limited_to_page_open() {
+        assert!(
+            parse_cli_args_from(["slop", "--page-open", "--manifest", "src/main.rs"])
+                .expect("manifest page should parse")
+                .page_manifest
+        );
+        let error = parse_cli_args_from(["slop", "--manifest", "src/main.rs"])
+            .expect_err("manifest without a page must fail");
+        assert!(error.to_string().contains("only be used with --page-open"));
     }
 
     #[test]

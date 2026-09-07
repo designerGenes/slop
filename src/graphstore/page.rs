@@ -10,6 +10,13 @@ use super::tower::Tier;
 
 pub const PAGE_SCHEMA: u32 = 1;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PageDelivery {
+    #[default]
+    Bundle,
+    Manifest,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PageStatus {
     Open,
@@ -55,6 +62,9 @@ pub struct PageManifest {
     pub seed_digest: String,
     pub opened_at_unix: u64,
     pub closed_at_unix: Option<u64>,
+    /// Existing pages predate delivery selection and are source bundles.
+    #[serde(default)]
+    pub delivery: PageDelivery,
     pub files: Vec<PageFileState>,
     #[serde(default)]
     pub closed_changes: Vec<PageCloseChange>,

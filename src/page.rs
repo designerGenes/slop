@@ -9,8 +9,8 @@ use crate::graph::find_git_root;
 use crate::graphstore::{
     self, Tier,
     page::{
-        self, PAGE_SCHEMA, PageAddReason, PageCloseChange, PageCloseSource, PageFileState,
-        PageManifest, PageStatus,
+        self, PAGE_SCHEMA, PageAddReason, PageCloseChange, PageCloseSource, PageDelivery,
+        PageFileState, PageManifest, PageStatus,
     },
 };
 use crate::models::{CliArgs, SoupMetaBlock};
@@ -35,24 +35,18 @@ pub fn run(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
 
 fn open(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
     let (root, seeds) = resolve_tower_seeds(args, config)?;
-    let tower = graphstore::refresh_tower_graph(&root, &seeds, config, args.reindex)?;
+    // `resolve_tower_seeds` has just refreshed and persisted the project graph.
+    // Build and save the cheap tower directly so page-open pays for one slop
+    // invocation and page-add can load the exact same ranking later.
+    let project = graphstore::load_project_graph(&root, config).ok_or_else(|| {
+        SlopError::GraphStoreFailure(format!("project graph disappeared for {}", root.display()))
+    })?;
+    let tower = graphstore::build_tower_graph(&project, &seeds, config);
+    graphstore::store::save_tower_graph(
+        &graphstore::store::tower_graph_path(config, &root, &tower.seed_digest),
+        &tower,
+    )?;
     let now = now_unix();
-    let mut files = Vec::new();
-    let mut states = Vec::new();
-    for member in &tower.members {
-        if member.tier == Tier::Zero || (member.tier == Tier::One && config.page_tier1_include) {
-            let path = root.join(&member.rel);
-            let source = build_source_file(&path)?;
-            states.push(PageFileState {
-                rel: member.rel.clone(),
-                tier: member.tier,
-                base_sha: source.base_sha.clone().expect("page source has SHA"),
-                added_via: PageAddReason::Opened,
-            });
-            files.push(source);
-        }
-    }
-    files = crate::secrets::enforce(&files, config, args.allow_secrets, args.redact)?;
     let page_id = allocate_page_id(config, &tower.repo_id, &root, &seeds)?;
     let mut manifest = PageManifest {
         schema: PAGE_SCHEMA,
@@ -64,48 +58,90 @@ fn open(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
         seed_digest: tower.seed_digest.clone(),
         opened_at_unix: now,
         closed_at_unix: None,
+        delivery: if args.page_manifest {
+            PageDelivery::Manifest
+        } else {
+            PageDelivery::Bundle
+        },
         files: Vec::new(),
         closed_changes: Vec::new(),
     };
-    let project = graphstore::refresh_project_graph(&root, config, false)?.0;
-    let mut selected = Vec::new();
-    let budget = args.max_slop_bytes.unwrap_or(config.max_slop_bytes);
-    for (state, source) in states.into_iter().zip(files) {
-        if state.tier == Tier::Zero {
+    let context = page::context_path(config, &manifest.repo_id, &page_id);
+    let serialized = if manifest.delivery == PageDelivery::Manifest {
+        for member in tower
+            .members
+            .iter()
+            .take(config.page_manifest_max_files.max(1))
+        {
+            let file = project
+                .file(&member.rel)
+                .expect("tower member remains in project graph");
+            manifest.files.push(PageFileState {
+                rel: member.rel.clone(),
+                tier: member.tier,
+                base_sha: file.blake3.clone(),
+                added_via: PageAddReason::Opened,
+            });
+        }
+        serialize_document(&[context_meta(&manifest, &tower, &project)], &[])?
+    } else {
+        let mut files = Vec::new();
+        let mut states = Vec::new();
+        for member in &tower.members {
+            if member.tier == Tier::Zero || (member.tier == Tier::One && config.page_tier1_include)
+            {
+                let source = build_source_file(&root.join(&member.rel))?;
+                states.push(PageFileState {
+                    rel: member.rel.clone(),
+                    tier: member.tier,
+                    base_sha: source.base_sha.clone().expect("page source has SHA"),
+                    added_via: PageAddReason::Opened,
+                });
+                files.push(source);
+            }
+        }
+        files = crate::secrets::enforce(&files, config, args.allow_secrets, args.redact)?;
+        let mut selected = Vec::new();
+        let budget = args.max_slop_bytes.unwrap_or(config.max_slop_bytes);
+        for (state, source) in states.into_iter().zip(files) {
+            if state.tier == Tier::Zero {
+                manifest.files.push(state);
+                selected.push(source);
+                continue;
+            }
             manifest.files.push(state);
             selected.push(source);
-            continue;
+            let meta = context_meta(&manifest, &tower, &project);
+            if serialize_document(std::slice::from_ref(&meta), &selected)?.len() > budget {
+                manifest.files.pop();
+                selected.pop();
+            }
         }
-        manifest.files.push(state);
-        selected.push(source);
-        let meta = context_meta(&manifest, &tower, &project);
-        if serialize_document(std::slice::from_ref(&meta), &selected)?.len() > budget {
-            manifest.files.pop();
-            selected.pop();
+        let serialized =
+            serialize_document(&[context_meta(&manifest, &tower, &project)], &selected)?;
+        if serialized.len() > budget {
+            let _ = fs::remove_dir(page::page_dir(config, &manifest.repo_id, &page_id));
+            return Err(SlopError::PageByteBudgetExceeded {
+                actual: serialized.len(),
+                cap: budget,
+            });
         }
-    }
-    let meta = context_meta(&manifest, &tower, &project);
-    let context = page::context_path(config, &manifest.repo_id, &page_id);
-    let serialized = serialize_document(&[meta], &selected)?;
-    if serialized.len() > budget {
-        let _ = fs::remove_dir(page::page_dir(config, &manifest.repo_id, &page_id));
-        return Err(SlopError::PageByteBudgetExceeded {
-            actual: serialized.len(),
-            cap: budget,
-        });
-    }
+        serialized
+    };
     fs::create_dir_all(context.parent().expect("context parent")).map_err(|source| {
         SlopError::DirectoryCreationFailure {
             path: context.parent().unwrap().to_path_buf(),
             source,
         }
     })?;
-    fs::write(&context, serialized).map_err(|source| SlopError::FileWriteFailure {
+    fs::write(&context, &serialized).map_err(|source| SlopError::FileWriteFailure {
         path: context.clone(),
         source,
     })?;
     page::save_page(config, &manifest)?;
-    if !args.silent {
+    if manifest.delivery == PageDelivery::Manifest {
+        print!("{serialized}");
+    } else if !args.silent {
         eprintln!("page {}: {}", page_id, context.display());
     }
     Ok(())
@@ -137,20 +173,24 @@ fn add(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
             },
         )?,
     )?;
-    let mut sources = document
-        .blocks
-        .into_iter()
-        .map(|block| crate::models::SourceFile {
-            original_absolute_path: block.original_absolute_path,
-            file_name: String::new(),
-            name_token: String::new(),
-            contents: reconstruct(&block.content_lines, block.trailing_newline),
-            logical_line_count: block.logical_line_count,
-            trailing_newline: block.trailing_newline,
-            base_sha: block.base_sha,
-            read_only: block.read_only,
-        })
-        .collect::<Vec<_>>();
+    let mut sources = if manifest.delivery == PageDelivery::Bundle {
+        document
+            .blocks
+            .into_iter()
+            .map(|block| crate::models::SourceFile {
+                original_absolute_path: block.original_absolute_path,
+                file_name: String::new(),
+                name_token: String::new(),
+                contents: reconstruct(&block.content_lines, block.trailing_newline),
+                logical_line_count: block.logical_line_count,
+                trailing_newline: block.trailing_newline,
+                base_sha: block.base_sha,
+                read_only: block.read_only,
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     for input in &args.inputs {
         let path = resolve_absolute(input, &cwd)?;
         let rel = path
@@ -174,15 +214,19 @@ fn add(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
             })?;
         }
         let source = build_source_file(&path)?;
-        let mut checked = crate::secrets::enforce(
-            std::slice::from_ref(&source),
-            config,
-            args.allow_secrets,
-            args.redact,
-        )?;
-        let source = checked
-            .pop()
-            .expect("one source remains after secret enforcement");
+        let source = if manifest.delivery == PageDelivery::Bundle {
+            let mut checked = crate::secrets::enforce(
+                std::slice::from_ref(&source),
+                config,
+                args.allow_secrets,
+                args.redact,
+            )?;
+            checked
+                .pop()
+                .expect("one source remains after secret enforcement")
+        } else {
+            source
+        };
         let tier = tower
             .members
             .iter()
@@ -200,7 +244,9 @@ fn add(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
             base_sha: source.base_sha.clone().expect("page source has SHA"),
             added_via: reason,
         });
-        sources.push(source);
+        if manifest.delivery == PageDelivery::Bundle {
+            sources.push(source);
+        }
     }
     let project = graphstore::refresh_project_graph(&root, config, false)?.0;
     document
@@ -209,9 +255,14 @@ fn add(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
     document
         .meta_blocks
         .insert(0, context_meta(&manifest, &tower, &project));
+    let serialized = if manifest.delivery == PageDelivery::Manifest {
+        serialize_document(&document.meta_blocks, &[])?
+    } else {
+        serialize_document(&document.meta_blocks, &sources)?
+    };
     fs::write(
         page::context_path(config, &repo_id, &manifest.page_id),
-        serialize_document(&document.meta_blocks, &sources)?,
+        serialized,
     )
     .map_err(|source| SlopError::FileWriteFailure {
         path: page::context_path(config, &repo_id, &manifest.page_id),
@@ -422,6 +473,53 @@ fn context_meta(
     tower: &graphstore::TowerGraph,
     project: &graphstore::ProjectGraph,
 ) -> SoupMetaBlock {
+    if manifest.delivery == PageDelivery::Manifest {
+        let mut lines = vec![
+            "# CONTEXT MANIFEST".to_string(),
+            format!(
+                "# page: {}   task: {}",
+                manifest.page_id,
+                manifest.task.as_deref().unwrap_or("(none)")
+            ),
+            format!("# repo: {}", manifest.repo_root),
+            "# delivery: manifest (source is intentionally not preloaded)".to_string(),
+            "# Open a file only when you are about to use it; do not read files speculatively because they appear here.".to_string(),
+            "# Run --page-add before editing a file not already listed in this page scope.".to_string(),
+            "#".to_string(),
+            "# RANKED FILES (page scope):".to_string(),
+        ];
+        for state in &manifest.files {
+            let defs = project
+                .file(&state.rel)
+                .map(|file| {
+                    file.def_tags()
+                        .take(8)
+                        .map(|tag| tag.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            lines.push(format!(
+                "#   {}   {}   defines: {}",
+                state.rel,
+                tier_label(state.tier),
+                defs
+            ));
+        }
+        let omitted = tower.members.len().saturating_sub(manifest.files.len());
+        lines.push("#".to_string());
+        lines.push(format!(
+            "# {omitted} lower-ranked tower members omitted; --page-add can extend the page scope when needed."
+        ));
+        return SoupMetaBlock {
+            label: "context-page".to_string(),
+            kind: "context-page".to_string(),
+            format: "text".to_string(),
+            line_count: lines.len(),
+            readonly: true,
+            content_lines: lines,
+        };
+    }
     let bundled: BTreeSet<&str> = manifest
         .files
         .iter()
@@ -503,6 +601,15 @@ fn context_meta(
         content_lines: lines,
     }
 }
+
+fn tier_label(tier: Tier) -> &'static str {
+    match tier {
+        Tier::Zero => "tier-0",
+        Tier::One => "tier-1",
+        Tier::Two => "tier-2",
+        Tier::Three => "tier-3",
+    }
+}
 fn reconstruct(lines: &[String], trailing: bool) -> String {
     let mut result = lines.join("\n");
     if trailing {
@@ -582,6 +689,7 @@ mod tests {
             seed_digest: "digest".to_string(),
             opened_at_unix: 0,
             closed_at_unix: None,
+            delivery: PageDelivery::Bundle,
             files: vec![PageFileState {
                 rel: "a.rs".to_string(),
                 tier: Tier::Zero,

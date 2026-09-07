@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use slop::cli::parse_cli_args_from;
 use slop::config::Config;
 use slop::graphstore::Tier;
-use slop::graphstore::page::{PageCloseSource, PageStatus, load_page, open_pages};
+use slop::graphstore::page::{PageCloseSource, PageDelivery, PageStatus, load_page, open_pages};
 
 static CWD_LOCK: Mutex<()> = Mutex::new(());
 
@@ -296,6 +296,80 @@ fn page_open_uses_the_byte_budget_to_demote_tier_one_to_outlines() {
     assert!(fs::metadata(&context).unwrap().len() <= 1_500);
     let contents = fs::read_to_string(context).unwrap();
     assert!(contents.contains("TIER 1 (outline only"));
+
+    std::env::set_current_dir(original_cwd).unwrap();
+}
+
+#[test]
+fn manifest_page_is_bounded_metadata_and_page_add_keeps_it_source_free() {
+    let _guard = CWD_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let repo = tempfile::tempdir().unwrap();
+    fixture(repo.path());
+    fs::write(
+        repo.path().join("src/main.rs"),
+        "use crate::a::a;\nuse crate::b::b;\npub fn main() { a(); b(); }\n",
+    )
+    .unwrap();
+    fs::write(repo.path().join("src/a.rs"), "pub fn a() {}\n").unwrap();
+    fs::write(repo.path().join("src/b.rs"), "pub fn b() {}\n").unwrap();
+    fs::write(repo.path().join("src/extra.rs"), "pub fn extra() {}\n").unwrap();
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-q", "-m", "add module files"]);
+
+    let state = tempfile::tempdir().unwrap();
+    let mut config = config(state.path());
+    config.page_manifest_max_files = 2;
+    let original_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(repo.path()).unwrap();
+
+    slop::page::run(
+        &args(&["--page-open", "--manifest", "src/main.rs"]),
+        &config,
+    )
+    .expect("manifest page opens");
+    let repo_id = slop::graphstore::store::repo_id(repo.path());
+    let page = open_pages(&config, &repo_id).pop().expect("one open page");
+    assert_eq!(page.delivery, PageDelivery::Manifest);
+    assert_eq!(page.files.len(), 2, "ranked page scope is bounded");
+
+    let context_path = slop::graphstore::page::context_path(&config, &repo_id, &page.page_id);
+    let context = fs::read_to_string(&context_path).unwrap();
+    assert!(context.contains("CONTEXT MANIFEST"));
+    assert!(context.contains("lower-ranked tower members omitted"));
+    assert!(
+        !context.contains("#SLOP \""),
+        "manifest must not preload source blocks"
+    );
+
+    slop::page::run(&args(&["--page-add", "src/extra.rs"]), &config).expect("add scope");
+    let page = open_pages(&config, &repo_id)
+        .pop()
+        .expect("page remains open");
+    assert!(page.files.iter().any(|file| file.rel == "src/extra.rs"));
+    let context = fs::read_to_string(&context_path).unwrap();
+    assert!(context.contains("src/extra.rs"));
+    assert!(
+        !context.contains("#SLOP \""),
+        "adding scope must not bundle source"
+    );
+
+    fs::write(
+        repo.path().join("src/extra.rs"),
+        "pub fn extra() { println!(\"edited\"); }\n",
+    )
+    .unwrap();
+    slop::page::run(&args(&["--page-close"]), &config).expect("close direct edit");
+    let closed = load_page(&slop::graphstore::page::manifest_path(
+        &config,
+        &repo_id,
+        &page.page_id,
+    ))
+    .unwrap();
+    assert!(closed.closed_changes.iter().any(|change| {
+        change.rel == "src/extra.rs" && change.source == PageCloseSource::Direct
+    }));
 
     std::env::set_current_dir(original_cwd).unwrap();
 }
