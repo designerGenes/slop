@@ -690,9 +690,23 @@ fn manifest_entry_line(
     }
     let mut anchors = Vec::new();
     if let Some(file) = project.file(&state.rel) {
-        for tag in file.def_tags() {
-            if idents.is_empty() || idents.contains(&tag.name) {
-                anchors.push(tag.line);
+        // A shared identifier is usually DEFINED in the seed and REFERENCED
+        // here, so the useful anchor is the reference site. Prefer those, then
+        // fall back to definitions.
+        for want_def in [false, true] {
+            for tag in file.tags.iter().filter(|tag| tag.def == want_def) {
+                if !idents.is_empty() && !idents.contains(&tag.name) {
+                    continue;
+                }
+                if idents.is_empty() && !tag.def {
+                    continue;
+                }
+                if !anchors.contains(&tag.line) {
+                    anchors.push(tag.line);
+                }
+                if anchors.len() == 3 {
+                    break;
+                }
             }
             if anchors.len() == 3 {
                 break;
@@ -710,7 +724,7 @@ fn manifest_entry_line(
         idents.into_iter().take(3).collect::<Vec<_>>().join(", ")
     };
     let anchors = if anchors.is_empty() {
-        "(no definition anchor)".to_string()
+        "(no anchor)".to_string()
     } else {
         anchors
             .into_iter()
@@ -882,7 +896,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_metadata_includes_via_symbols_and_definition_anchors() {
+    fn manifest_metadata_anchors_a_candidate_reference_to_a_seed_symbol() {
         let mut manifest = manifest();
         manifest.delivery = PageDelivery::Manifest;
         manifest.files.push(PageFileState {
@@ -940,8 +954,8 @@ mod tests {
                     "b.rs",
                     vec![StoredTag {
                         name: "shared".to_string(),
-                        line: 42,
-                        def: true,
+                        line: 2,
+                        def: false,
                     }],
                 ),
             ],
@@ -963,7 +977,7 @@ mod tests {
             .join("\n");
         assert!(rendered.contains("via: a.rs"), "{rendered}");
         assert!(rendered.contains("shares: shared"), "{rendered}");
-        assert!(rendered.contains("anchor: L42"), "{rendered}");
+        assert!(rendered.contains("anchor: L2"), "{rendered}");
     }
 
     #[test]
