@@ -40,8 +40,14 @@ struct RawCliArgs {
     page_open: bool,
     #[arg(long = "page-add")]
     page_add: bool,
+    /// Create a missing empty file before adding it to the current page.
+    #[arg(long = "create")]
+    page_add_create: bool,
     #[arg(long = "page-close")]
     page_close: bool,
+    /// Close a page that has no returned slop documents or direct file edits.
+    #[arg(long = "allow-empty")]
+    allow_empty_page_close: bool,
     #[arg(long = "page-list")]
     page_list: bool,
     #[arg(long = "page-prune")]
@@ -142,7 +148,6 @@ where
     if args.page_add {
         validate_page_add_options(&args)?;
     }
-
     Ok(args)
 }
 
@@ -166,6 +171,16 @@ fn validate_process_modes(args: &CliArgs) -> Result<(), SlopError> {
             "{} cannot be combined with {}",
             enabled[0], enabled[1]
         )));
+    }
+    if args.allow_empty_page_close && !args.page_close {
+        return Err(SlopError::InvalidCliUsage(
+            "--allow-empty can only be used with --page-close".to_string(),
+        ));
+    }
+    if args.page_add_create && !args.page_add {
+        return Err(SlopError::InvalidCliUsage(
+            "--create can only be used with --page-add".to_string(),
+        ));
     }
     Ok(())
 }
@@ -319,9 +334,6 @@ fn validate_page_open_options(args: &CliArgs) -> Result<(), SlopError> {
     if args.include_graph {
         unsupported.push("-g/--include-graph");
     }
-    if args.max_slop_bytes.is_some() {
-        unsupported.push("--max-slop-bytes");
-    }
     if args.dry_run {
         unsupported.push("--dry-run");
     }
@@ -330,6 +342,9 @@ fn validate_page_open_options(args: &CliArgs) -> Result<(), SlopError> {
     }
     if args.output_dir.is_some() || args.slop_to.is_some() {
         unsupported.push("--output/--slop-to");
+    }
+    if args.page_add_create {
+        unsupported.push("--create");
     }
     if unsupported.is_empty() {
         Ok(())
@@ -488,7 +503,9 @@ fn cli_args_from_raw(parsed: RawCliArgs) -> CliArgs {
         tower_graph: parsed.tower_graph,
         page_open: parsed.page_open,
         page_add: parsed.page_add,
+        page_add_create: parsed.page_add_create,
         page_close: parsed.page_close,
+        allow_empty_page_close: parsed.allow_empty_page_close,
         page_list: parsed.page_list,
         page_prune: parsed.page_prune,
         page_id: parsed.page_id,

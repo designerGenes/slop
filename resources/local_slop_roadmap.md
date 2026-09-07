@@ -153,9 +153,9 @@ slop --page-list
 **Workspace:** `$HOME/.slop/pages/<repo-id>/<page-id>/`
 
 ```
-page.json          task, tier assignment, base SHAs, status, timestamps
-context.slop.md    the working slop — the only thing the agent reads
-returned/          reslopped blocks awaiting deslop
+page.json          task, tier assignment, base SHAs, close changes, status, timestamps
+context.slop.md    read-only context for local agents; working slop for bundle-only agents
+returned/          bundle-only reslopped blocks awaiting deslop
 ```
 
 This lives under `$HOME/.slop/` rather than the cache: a page holds in-flight
@@ -168,9 +168,12 @@ scored it, so promotion is a tier change plus an append, and `#SLOP_REQUEST`
 is already the channel for asking.
 
 **On close:** deslop `returned/` into the real files, honouring `SLOP_BASE_SHA`
-drift detection exactly as today, then refresh the project graph. That refresh
-is cheap only because of Stage 1 — a handful of touched files re-parse and
-nothing else does.
+drift detection exactly as today. Also compare the real page files against their
+recorded base SHAs so local tool-using agents can edit those files directly;
+record the direct and returned change sources in the closed manifest, then
+refresh the project graph. Refuse an empty close unless `--allow-empty` is
+explicit. That refresh is cheap only because of Stage 1 — a handful of touched
+files re-parse and nothing else does.
 
 ---
 

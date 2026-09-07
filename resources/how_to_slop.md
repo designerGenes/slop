@@ -153,10 +153,10 @@ The user can then re-slop with that file included (e.g. `slop --seed <path> ...`
 
 Before starting a large task, ask the human/tool running slop to run `slop <repo> --project-graph` if you do not already have graph context in this conversation.
 
-When you receive a `context-page` meta block, treat its tier-0/1 files as your complete editable working set. Its tier-2/3 listings are an index of nearby files, not unavailable files: request one when needed with the ordinary convention:
+When you receive a `context-page` meta block, treat its tier-0/1 files as your complete editable working set. A local tool-using agent edits those real page files directly; `context.slop.md` is its read-only context, not a write-back channel. Its tier-2/3 listings are an index of nearby files, not unavailable files: request one when needed with the ordinary convention:
 
 ```
 #SLOP_REQUEST "<absolute_path>" <short reason>
 ```
 
-Never fabricate tier-2/3 content from an outline entry; the outline is a pointer, not a substitute for source. Return edits as an ordinary reslopped document; the human/tool applies `--page-close`. If you need a file absent even from tier 3, ask for a project-graph rebuild with `--reindex`, or request that specific file by path when its location is known.
+Never fabricate tier-2/3 content from an outline entry; the outline is a pointer, not a substitute for source. Bundle-only agents return an ordinary reslopped document, and their host writes it to the selected page's `returned/` directory before running `--page-close`. Local tool-using agents run `--page-close` after directly editing page files so Slop records the changes and refreshes the graph. If no returned document or direct edit exists, `--page-close` refuses to close unless `--allow-empty` explicitly abandons the page. `--max-slop-bytes` limits full-text page content by demoting tier-1 files to outlines while retaining tier 0; page opening fails if required tier-0 content and metadata alone cannot fit. A graph cannot rank a file that does not exist yet: add an intentional new file with `--page-add --create <path>`, then edit the real file directly. If an existing file is absent even from tier 3, ask for a project-graph rebuild with `--reindex`, or request that specific file by path when its location is known.

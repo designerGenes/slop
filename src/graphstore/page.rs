@@ -23,6 +23,19 @@ pub enum PageAddReason {
     Promoted,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PageCloseSource {
+    Direct,
+    Returned,
+    DirectAndReturned,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PageCloseChange {
+    pub rel: String,
+    pub source: PageCloseSource,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageFileState {
     pub rel: String,
@@ -43,6 +56,8 @@ pub struct PageManifest {
     pub opened_at_unix: u64,
     pub closed_at_unix: Option<u64>,
     pub files: Vec<PageFileState>,
+    #[serde(default)]
+    pub closed_changes: Vec<PageCloseChange>,
 }
 
 pub fn pages_dir(config: &Config) -> PathBuf {

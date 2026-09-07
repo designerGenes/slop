@@ -1254,6 +1254,21 @@ pub fn normalize_path(path: &Path) -> PathBuf {
     normalized
 }
 
+/// Resolve symlinked path prefixes when possible while retaining a stable path
+/// for a file that may no longer exist. Page scope checks need this because
+/// macOS exposes temporary files through both `/var` and `/private/var`.
+pub fn canonicalize_path(path: &Path) -> PathBuf {
+    if let Ok(canonical) = fs::canonicalize(path) {
+        return canonical;
+    }
+    if let (Some(parent), Some(name)) = (path.parent(), path.file_name())
+        && let Ok(canonical_parent) = fs::canonicalize(parent)
+    {
+        return canonical_parent.join(name);
+    }
+    normalize_path(path)
+}
+
 fn is_supported_file_type(file_type: &fs::FileType) -> bool {
     if file_type.is_file() || file_type.is_dir() {
         return true;

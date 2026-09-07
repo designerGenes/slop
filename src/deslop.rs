@@ -278,7 +278,7 @@ pub fn apply_document(
         }
 
         let exact_allowed = allowed_paths
-            .is_none_or(|paths| paths.contains(&crate::pathing::normalize_path(&restored_path)));
+            .is_none_or(|paths| paths.contains(&crate::pathing::canonicalize_path(&restored_path)));
         if !exact_allowed || !is_within_allowed_roots(&restored_path, &allowed_roots) {
             return Err(SlopError::WriteOutsideAllowedRoot {
                 path: restored_path.clone(),

@@ -143,6 +143,12 @@ pub enum SlopError {
     PageNotFound(String),
     #[error("page {0} is already closed")]
     PageAlreadyClosed(String),
+    #[error(
+        "page {page} has no returned slop documents or direct edits; it remains open (use --allow-empty to close an abandoned page)"
+    )]
+    PageCloseNothingToApply { page: String },
+    #[error("context page requires {actual} bytes, exceeding the {cap}-byte budget")]
+    PageByteBudgetExceeded { actual: usize, cap: usize },
     #[error("returned block for {path} targets a file outside page {page}'s scope")]
     PageWriteOutsideScope { path: PathBuf, page: String },
 }

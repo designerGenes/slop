@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
@@ -8,10 +8,13 @@ use crate::error::SlopError;
 use crate::graph::find_git_root;
 use crate::graphstore::{
     self, Tier,
-    page::{self, PAGE_SCHEMA, PageAddReason, PageFileState, PageManifest, PageStatus},
+    page::{
+        self, PAGE_SCHEMA, PageAddReason, PageCloseChange, PageCloseSource, PageFileState,
+        PageManifest, PageStatus,
+    },
 };
 use crate::models::{CliArgs, SoupMetaBlock};
-use crate::pathing::{normalize_path, resolve_absolute};
+use crate::pathing::{canonicalize_path, resolve_absolute};
 use crate::slop::build_source_file;
 use crate::slop_format::{parse_document, serialize_document};
 use crate::tower_graph::resolve_tower_seeds;
@@ -51,7 +54,7 @@ fn open(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
     }
     files = crate::secrets::enforce(&files, config, args.allow_secrets, args.redact)?;
     let page_id = allocate_page_id(config, &tower.repo_id, &root, &seeds)?;
-    let manifest = PageManifest {
+    let mut manifest = PageManifest {
         schema: PAGE_SCHEMA,
         page_id: page_id.clone(),
         repo_id: tower.repo_id.clone(),
@@ -61,25 +64,45 @@ fn open(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
         seed_digest: tower.seed_digest.clone(),
         opened_at_unix: now,
         closed_at_unix: None,
-        files: states,
+        files: Vec::new(),
+        closed_changes: Vec::new(),
     };
-    let meta = context_meta(
-        &manifest,
-        &tower,
-        &graphstore::refresh_project_graph(&root, config, false)?.0,
-    );
+    let project = graphstore::refresh_project_graph(&root, config, false)?.0;
+    let mut selected = Vec::new();
+    let budget = args.max_slop_bytes.unwrap_or(config.max_slop_bytes);
+    for (state, source) in states.into_iter().zip(files) {
+        if state.tier == Tier::Zero {
+            manifest.files.push(state);
+            selected.push(source);
+            continue;
+        }
+        manifest.files.push(state);
+        selected.push(source);
+        let meta = context_meta(&manifest, &tower, &project);
+        if serialize_document(std::slice::from_ref(&meta), &selected)?.len() > budget {
+            manifest.files.pop();
+            selected.pop();
+        }
+    }
+    let meta = context_meta(&manifest, &tower, &project);
     let context = page::context_path(config, &manifest.repo_id, &page_id);
+    let serialized = serialize_document(&[meta], &selected)?;
+    if serialized.len() > budget {
+        let _ = fs::remove_dir(page::page_dir(config, &manifest.repo_id, &page_id));
+        return Err(SlopError::PageByteBudgetExceeded {
+            actual: serialized.len(),
+            cap: budget,
+        });
+    }
     fs::create_dir_all(context.parent().expect("context parent")).map_err(|source| {
         SlopError::DirectoryCreationFailure {
             path: context.parent().unwrap().to_path_buf(),
             source,
         }
     })?;
-    fs::write(&context, serialize_document(&[meta], &files)?).map_err(|source| {
-        SlopError::FileWriteFailure {
-            path: context.clone(),
-            source,
-        }
+    fs::write(&context, serialized).map_err(|source| SlopError::FileWriteFailure {
+        path: context.clone(),
+        source,
     })?;
     page::save_page(config, &manifest)?;
     if !args.silent {
@@ -139,6 +162,17 @@ fn add(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
             eprintln!("warning: {rel} is already in page {}", manifest.page_id);
             continue;
         }
+        if !path.exists() && args.page_add_create {
+            let parent = path.parent().expect("page input has parent");
+            fs::create_dir_all(parent).map_err(|source| SlopError::DirectoryCreationFailure {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+            fs::write(&path, "").map_err(|source| SlopError::FileWriteFailure {
+                path: path.clone(),
+                source,
+            })?;
+        }
         let source = build_source_file(&path)?;
         let mut checked = crate::secrets::enforce(
             std::slice::from_ref(&source),
@@ -195,41 +229,114 @@ fn close(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
     let allowed: BTreeSet<PathBuf> = manifest
         .files
         .iter()
-        .map(|file| normalize_path(&root.join(&file.rel)))
+        .map(|file| canonicalize_path(&root.join(&file.rel)))
         .collect();
+    let direct_changes = direct_page_changes(&root, &manifest)?;
     let returned = page::page_dir(config, &repo_id, &manifest.page_id).join("returned");
     let mut documents = Vec::new();
-    if let Ok(entries) = fs::read_dir(returned) {
-        for entry in entries.filter_map(Result::ok) {
-            let content =
-                fs::read_to_string(entry.path()).map_err(|source| SlopError::FileReadFailure {
-                    path: entry.path(),
+    match fs::read_dir(&returned) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry.map_err(|source| SlopError::FileReadFailure {
+                    path: returned.clone(),
                     source,
                 })?;
-            let document = parse_document(&content)?;
-            for block in &document.blocks {
-                let path = normalize_path(&block.original_absolute_path);
-                if !allowed.contains(&path) {
-                    return Err(SlopError::PageWriteOutsideScope {
-                        path,
-                        page: manifest.page_id.clone(),
-                    });
+                let content = fs::read_to_string(entry.path()).map_err(|source| {
+                    SlopError::FileReadFailure {
+                        path: entry.path(),
+                        source,
+                    }
+                })?;
+                let document = parse_document(&content)?;
+                for block in &document.blocks {
+                    let path = canonicalize_path(&block.original_absolute_path);
+                    if !allowed.contains(&path) {
+                        return Err(SlopError::PageWriteOutsideScope {
+                            path,
+                            page: manifest.page_id.clone(),
+                        });
+                    }
                 }
+                documents.push(document);
             }
-            documents.push(document);
+        }
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(SlopError::FileReadFailure {
+                path: returned,
+                source,
+            });
         }
     }
+    if documents.is_empty() && direct_changes.is_empty() && !args.allow_empty_page_close {
+        return Err(SlopError::PageCloseNothingToApply {
+            page: manifest.page_id.clone(),
+        });
+    }
+    let direct_change_count = direct_changes.len();
+    let mut returned_changes = BTreeSet::new();
     for document in documents {
-        crate::deslop::apply_document(document, args, config, Some(&allowed))?;
+        returned_changes.extend(
+            crate::deslop::apply_document(document, args, config, Some(&allowed))?
+                .into_iter()
+                .map(|path| canonicalize_path(&path)),
+        );
     }
     let (_, report) = graphstore::refresh_project_graph(&root, config, false)?;
+    manifest.closed_changes = manifest
+        .files
+        .iter()
+        .filter_map(|file| {
+            let path = canonicalize_path(&root.join(&file.rel));
+            match (
+                direct_changes.contains(&file.rel),
+                returned_changes.contains(&path),
+            ) {
+                (false, false) => None,
+                (true, false) => Some(PageCloseSource::Direct),
+                (false, true) => Some(PageCloseSource::Returned),
+                (true, true) => Some(PageCloseSource::DirectAndReturned),
+            }
+            .map(|source| PageCloseChange {
+                rel: file.rel.clone(),
+                source,
+            })
+        })
+        .collect();
     manifest.status = PageStatus::Closed;
     manifest.closed_at_unix = Some(now_unix());
     page::save_page(config, &manifest)?;
     if !args.silent {
-        eprintln!("page {} closed; {}", manifest.page_id, report.summary());
+        eprintln!(
+            "page {} closed; {} direct, {} returned; {}",
+            manifest.page_id,
+            direct_change_count,
+            returned_changes.len(),
+            report.summary()
+        );
     }
     Ok(())
+}
+
+fn direct_page_changes(
+    root: &Path,
+    manifest: &PageManifest,
+) -> Result<BTreeSet<String>, SlopError> {
+    manifest
+        .files
+        .iter()
+        .filter_map(|file| {
+            let path = root.join(&file.rel);
+            match fs::read(&path) {
+                Ok(contents) => (blake3::hash(&contents).to_hex().as_str() != file.base_sha)
+                    .then_some(Ok(file.rel.clone())),
+                Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                    Some(Ok(file.rel.clone()))
+                }
+                Err(source) => Some(Err(SlopError::FileReadFailure { path, source })),
+            }
+        })
+        .collect()
 }
 
 fn list(config: &Config) -> Result<(), SlopError> {
@@ -339,8 +446,27 @@ fn context_meta(
                 .join(", ")
         ),
         "#".to_string(),
-        "# TIER 2 (outline only - request the file to see full text):".to_string(),
+        "# TIER 1 (outline only - not bundled by page budget or configuration):".to_string(),
     ];
+    for member in tower
+        .members
+        .iter()
+        .filter(|member| member.tier == Tier::One && !bundled.contains(member.rel.as_str()))
+    {
+        let defs = project
+            .file(&member.rel)
+            .map(|file| {
+                file.def_tags()
+                    .take(8)
+                    .map(|tag| tag.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        lines.push(format!("#   {}   defines: {}", member.rel, defs));
+    }
+    lines.push("#".to_string());
+    lines.push("# TIER 2 (outline only - request the file to see full text):".to_string());
     for member in tower
         .members
         .iter()
@@ -462,6 +588,7 @@ mod tests {
                 base_sha: "0".repeat(64),
                 added_via: PageAddReason::Opened,
             }],
+            closed_changes: Vec::new(),
         }
     }
 
