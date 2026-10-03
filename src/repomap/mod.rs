@@ -292,7 +292,7 @@ mod tests {
             .get_repo_map(&[], &[])
             .expect("map");
         assert!(map.contains("Ca = files depending on this one"), "{map}");
-        assert!(map.contains("#SLOP_REQUEST"), "{map}");
+        assert!(map.contains("slop -r"), "{map}");
     }
 
     #[test]

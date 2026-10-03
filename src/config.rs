@@ -70,6 +70,26 @@ pub struct Config {
     pub page_tier1_include: bool,
     /// Maximum ranked files recorded in a manifest-delivered context page.
     pub page_manifest_max_files: usize,
+    /// Render per-file `entry:` lines derived from the page task.
+    pub page_manifest_entry_anchors: bool,
+    /// Cap on `entry:` lines per manifest file.
+    pub page_manifest_max_entry_points_per_file: usize,
+    /// Character budget for one preview line.
+    pub page_manifest_entry_preview_chars: usize,
+    /// Token overlap required between a probe and a candidate entry.
+    pub anchor_affinity_min_shared_tokens: usize,
+    /// Sorted runs must contain at least this many entries to anchor on.
+    pub anchor_sorted_block_min_entries: usize,
+    /// A run survives gaps up to this many lines.
+    pub anchor_sorted_block_max_line_gap: usize,
+    /// Admit task-relevant files into a manifest page via reserved slots.
+    pub page_task_relevance_promotion: bool,
+    /// Manifest slots reserved for files that yield an entry point for the task.
+    pub page_task_relevance_reserved_slots: usize,
+    /// Ceiling on candidates examined by the task-relevance pre-filter.
+    pub page_task_relevance_max_candidates: usize,
+    /// Prior sibling-addition commits to mine for history selection.
+    pub page_history_commit_window: usize,
     pub verbose_output: bool,
     pub deslop_cache: bool,
     pub deslop_cache_path: Option<PathBuf>,
@@ -123,6 +143,18 @@ impl Default for Config {
             page_prune_after: "7d".to_string(),
             page_tier1_include: true,
             page_manifest_max_files: 32,
+            // On by default but bounded: the numbers below were the ones the
+            // anchor prototypes were validated against.
+            page_manifest_entry_anchors: true,
+            page_manifest_max_entry_points_per_file: 2,
+            page_manifest_entry_preview_chars: 120,
+            anchor_affinity_min_shared_tokens: 1,
+            anchor_sorted_block_min_entries: 4,
+            anchor_sorted_block_max_line_gap: 2,
+            page_task_relevance_promotion: true,
+            page_task_relevance_reserved_slots: 8,
+            page_task_relevance_max_candidates: 512,
+            page_history_commit_window: 8,
             verbose_output: false,
             // Off by default: deslop idempotency now comes from comparing the
             // block against the file on disk, which is exact and stateless.
@@ -256,7 +288,23 @@ pub fn default_config_yaml() -> String {
          page_prune_after: {page_prune_after}\n\
          page_tier1_include: {page_tier1_include}\n\
          # Max ranked paths in a manifest-only local context page.\n\
-         page_manifest_max_files: {page_manifest_max_files}\n\n\
+         page_manifest_max_files: {page_manifest_max_files}\n\
+         # Entry anchors: per-file `entry:` lines derived from --task.\n\
+         page_manifest_entry_anchors: {page_manifest_entry_anchors}\n\
+         page_manifest_max_entry_points_per_file: {page_manifest_max_entry_points_per_file}\n\
+         page_manifest_entry_preview_chars: {page_manifest_entry_preview_chars}\n\
+         anchor_affinity_min_shared_tokens: {anchor_affinity_min_shared_tokens}\n\
+         anchor_sorted_block_min_entries: {anchor_sorted_block_min_entries}\n\
+         anchor_sorted_block_max_line_gap: {anchor_sorted_block_max_line_gap}\n\n\
+         # Task-relevance promotion: reserve manifest slots for files that\n\
+         # yield an entry point for the task's probe. Off or no --task keeps\n\
+         # selection byte-identical to the score-ranked ordering.\n\
+         page_task_relevance_promotion: {page_task_relevance_promotion}\n\
+         page_task_relevance_reserved_slots: {page_task_relevance_reserved_slots}\n\
+         page_task_relevance_max_candidates: {page_task_relevance_max_candidates}\n\n\
+         # History selection: prior sibling-additions to mine. A file needs\n\
+         # at least two agreeing commits (MIN_AGREEING_COMMITS) to win a slot.\n\
+         page_history_commit_window: {page_history_commit_window}\n\n\
          # Print the ignored-file annotations in the slopify tree. Override\n\
          # per-run with --verbose.\n\
          verbose_output: {verbose_output}\n\n\
@@ -313,6 +361,16 @@ pub fn default_config_yaml() -> String {
         page_prune_after = "7d",
         page_tier1_include = true,
         page_manifest_max_files = 32,
+        page_manifest_entry_anchors = true,
+        page_manifest_max_entry_points_per_file = 2,
+        page_manifest_entry_preview_chars = 120,
+        anchor_affinity_min_shared_tokens = 1,
+        anchor_sorted_block_min_entries = 4,
+        anchor_sorted_block_max_line_gap = 2,
+        page_task_relevance_promotion = true,
+        page_task_relevance_reserved_slots = 8,
+        page_task_relevance_max_candidates = 512,
+        page_history_commit_window = 8,
         verbose_output = false,
         deslop_cache = false,
         deslop_cache_path = "~/.slop/.slop_blocks_cache",
@@ -461,6 +519,16 @@ mod tests {
         assert_eq!(config.tower_structural_hub_min_fraction, 0.05);
         assert_eq!(config.tower_structural_hub_min_links, 2);
         assert_eq!(config.page_manifest_max_files, 32);
+        assert!(config.page_manifest_entry_anchors);
+        assert_eq!(config.page_manifest_max_entry_points_per_file, 2);
+        assert_eq!(config.page_manifest_entry_preview_chars, 120);
+        assert_eq!(config.anchor_affinity_min_shared_tokens, 1);
+        assert_eq!(config.anchor_sorted_block_min_entries, 4);
+        assert_eq!(config.anchor_sorted_block_max_line_gap, 2);
+        assert!(config.page_task_relevance_promotion);
+        assert_eq!(config.page_task_relevance_reserved_slots, 8);
+        assert_eq!(config.page_task_relevance_max_candidates, 512);
+        assert_eq!(config.page_history_commit_window, 8);
     }
 
     #[test]
@@ -482,6 +550,16 @@ mod tests {
         assert!(yaml.contains("tower_structural_hub_min_fraction:"));
         assert!(yaml.contains("tower_structural_hub_min_links:"));
         assert!(yaml.contains("page_manifest_max_files:"));
+        assert!(yaml.contains("page_manifest_entry_anchors:"));
+        assert!(yaml.contains("page_manifest_max_entry_points_per_file:"));
+        assert!(yaml.contains("page_manifest_entry_preview_chars:"));
+        assert!(yaml.contains("anchor_affinity_min_shared_tokens:"));
+        assert!(yaml.contains("anchor_sorted_block_min_entries:"));
+        assert!(yaml.contains("anchor_sorted_block_max_line_gap:"));
+        assert!(yaml.contains("page_task_relevance_promotion:"));
+        assert!(yaml.contains("page_task_relevance_reserved_slots:"));
+        assert!(yaml.contains("page_task_relevance_max_candidates:"));
+        assert!(yaml.contains("page_history_commit_window:"));
         assert!(yaml.contains("verbose_output:"));
         assert!(yaml.contains("deslop_cache:"));
         assert!(yaml.contains("deslop_cache_path:"));

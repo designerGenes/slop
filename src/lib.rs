@@ -1,9 +1,11 @@
+pub mod anchor;
 pub mod cli;
 pub mod config;
 pub mod deslop;
 pub mod error;
 pub mod graph;
 pub mod graphstore;
+pub mod history_select;
 pub mod logo;
 pub mod manual_deslop;
 pub mod models;

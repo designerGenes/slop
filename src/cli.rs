@@ -151,7 +151,7 @@ where
         validate_project_graph_options(&args)?;
     }
     if args.tower_graph {
-        validate_tower_graph_options(&args)?;
+        validate_tower_graph_options(&args, false)?;
     }
     if !args.tier_recall.is_empty() {
         validate_tier_recall_options(&args)?;
@@ -276,7 +276,7 @@ fn validate_project_graph_options(args: &CliArgs) -> Result<(), SlopError> {
     }
 }
 
-fn validate_tower_graph_options(args: &CliArgs) -> Result<(), SlopError> {
+fn validate_tower_graph_options(args: &CliArgs, allow_task: bool) -> Result<(), SlopError> {
     let mut unsupported = Vec::new();
     if !args.matches.is_empty() {
         unsupported.push("--match");
@@ -287,7 +287,7 @@ fn validate_tower_graph_options(args: &CliArgs) -> Result<(), SlopError> {
     if !args.symbols.is_empty() {
         unsupported.push("--symbol");
     }
-    if args.task.is_some() {
+    if args.task.is_some() && !allow_task {
         unsupported.push("--task");
     }
     if args.hops.is_some() {
@@ -331,7 +331,9 @@ fn validate_tower_graph_options(args: &CliArgs) -> Result<(), SlopError> {
 }
 
 fn validate_tier_recall_options(args: &CliArgs) -> Result<(), SlopError> {
-    validate_tower_graph_options(args)?;
+    // Task is accepted here: `in_page` must reflect the task-relevance
+    // selection a real `--page-open --manifest` would perform.
+    validate_tower_graph_options(args, true)?;
     let mut unsupported = Vec::new();
     if args.output_dir.is_some() || args.slop_to.is_some() {
         unsupported.push("--output/--slop-to");

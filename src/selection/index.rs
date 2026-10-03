@@ -359,6 +359,20 @@ fn index_file(
     Ok(())
 }
 
+/// A task string is prose, not a query DSL. Tantivy's parser treats `-`, `(`,
+/// `:` and friends as syntax, so a commit message with hyphens or parentheses
+/// ("Release 0.1.1 - Bump version...") failed to parse and the whole retrieval
+/// returned an error instead of results. Keep word characters, turn everything
+/// else into whitespace.
+pub fn sanitize_query_text(text: &str) -> String {
+    text.chars()
+        .map(|ch| if ch.is_alphanumeric() || ch == '_' { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub fn query_index(
     index: &Index,
     reader: &IndexReader,
@@ -372,8 +386,12 @@ pub fn query_index(
     let mut query_parser = QueryParser::for_index(index, vec![fields.content, fields.symbols]);
     query_parser.set_field_boost(fields.symbols, 3.0);
 
+    let sanitized = sanitize_query_text(query_text);
+    if sanitized.is_empty() {
+        return Ok(Vec::new());
+    }
     let query = query_parser
-        .parse_query(query_text)
+        .parse_query(&sanitized)
         .map_err(|e| SlopError::RetrievalQueryFailure(format!("parse: {}", e)))?;
 
     let searcher = reader.searcher();
@@ -404,4 +422,25 @@ pub fn query_index(
     }
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_query_text;
+
+    #[test]
+    fn sanitize_query_text_strips_query_syntax() {
+        let raw = "Release 0.1.1 - Bump version to 0.1.1 (markdownlint setting)";
+        let clean = sanitize_query_text(raw);
+        assert!(!clean.contains('-'), "{clean}");
+        assert!(!clean.contains('('), "{clean}");
+        assert!(clean.contains("Release"), "{clean}");
+        assert!(clean.contains("markdownlint"), "{clean}");
+    }
+
+    #[test]
+    fn sanitize_query_text_handles_empty_and_punctuation_only() {
+        assert_eq!(sanitize_query_text(""), "");
+        assert_eq!(sanitize_query_text("--- () ::"), "");
+    }
 }

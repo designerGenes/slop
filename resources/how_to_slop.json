@@ -94,15 +94,15 @@
       "delivery": "In a chat context, emit the reslopified output as a single fenced code block with language tag `slop` (or no language) so #SLOP/#SLOP_META lines are not rendered as headers. Do not split across multiple code blocks. With tool/disk access, write to a .md file at the user's chosen path."
     },
     "requesting_files": {
-      "rule": "The repo-map meta block may reference files NOT present as editable #SLOP blocks. Those are context only. If you need the full contents of such a file to complete the task, do NOT infer or hallucinate them — request the file by emitting a line in your text response (not inside a slop block):",
-      "format": "#SLOP_REQUEST \"<absolute_path>\" <short reason>",
-      "note": "The user can then re-slop with that file included (e.g. slop --seed <path> ...). This is a convention, not a parser change to slop files."
+      "rule": "The repo-map meta block may reference files NOT present as editable #SLOP blocks. Those are context only. If you need the full contents of such a file to complete the task, do NOT infer or hallucinate them — request it by emitting a full slop command in your text response (not inside a slop block):",
+      "format": "slop -r \"<file1>\" \"<file2>\" \"<recursiveDirectory1>\" -s",
+      "note": "The user runs it to slopify those paths. This is a convention, not a parser change to slop files."
     },
     "local_context_paging": {
       "title": "Local context paging",
       "instructions": [
         "Before starting a large task, if you do not already have graph context in this conversation, ask the human/tool running slop to run `slop <repo> --project-graph`.",
-        "When handed a context-page meta block, treat tier-0/1 files as the complete editable working set. Treat tier-2/3 listings as an index of nearby files, not as unavailable files; request a needed file with `#SLOP_REQUEST \"<absolute_path>\" <short reason>`.",
+        "When handed a context-page meta block, treat tier-0/1 files as the complete editable working set. Treat tier-2/3 listings as an index of nearby files, not as unavailable files; request one with `slop -r \"<absolute_path>\" -s`.",
         "Never fabricate a tier-2/3 file's content from its outline entry; the outline is a pointer, not a substitute for source.",
         "A local tool-using agent edits real page files directly, then runs `--page-close`. A bundle-only agent returns an ordinary reslopped document; its host writes that document to the selected page's `returned/` directory before close.",
         "`--max-slop-bytes` demotes tier-1 full text to outlines while retaining tier 0; page opening fails if required tier-0 content and metadata cannot fit. A graph cannot rank a file that does not exist; use `--page-add --create <path>` for an intentional new file.",

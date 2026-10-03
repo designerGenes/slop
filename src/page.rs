@@ -34,6 +34,210 @@ pub fn run(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
     }
 }
 
+/// One manifest-page selection decision: indices into `tower.members`, in page
+/// order, plus which of them were admitted through the reserved
+/// task-relevance slots.
+#[derive(Debug)]
+pub(crate) struct PageSelection {
+    pub(crate) indices: Vec<usize>,
+    pub(crate) promoted: BTreeSet<usize>,
+    /// Which signal actually admitted the promoted files: `"history"`,
+    /// `"qualifier"`, or `"legacy"`.
+    pub(crate) signal: &'static str,
+    /// Prior sibling-addition commits mined, when the history signal was used.
+    pub(crate) prior_commits: Option<usize>,
+}
+
+/// Choose the manifest page's files.
+///
+/// Without task-relevance promotion this is exactly the legacy behaviour: the
+/// first `page_manifest_max_files` tower members. With it, the seed stays
+/// first, up to `page_task_relevance_reserved_slots` files selected by the
+/// history signal (or the qualifier scorer when history is unusable) follow,
+/// and the remainder is filled from the existing tower order. Promotion
+/// reserves slots rather than altering scores, so it cannot reshape the
+/// ranking — only displace a bounded number of files.
+pub(crate) fn select_manifest_page(
+    tower: &graphstore::TowerGraph,
+    config: &Config,
+    task: Option<&str>,
+    repo_root: &Path,
+    verbose: bool,
+) -> PageSelection {
+    let cap = config.page_manifest_max_files.max(1);
+    let legacy = || PageSelection {
+        indices: (0..tower.members.len().min(cap)).collect(),
+        promoted: BTreeSet::new(),
+        signal: "legacy",
+        prior_commits: None,
+    };
+    if !config.page_task_relevance_promotion {
+        return legacy();
+    }
+    let Some(task) = task.filter(|task| !task.trim().is_empty()) else {
+        return legacy();
+    };
+
+    // Primary signal: what did prior sibling additions modify? The repository
+    // has already answered "which files does adding a new X touch" every time
+    // someone added the previous X. No naming assumptions, no fitted weights.
+    if let Some(seed) = tower.seeds.first()
+        && let Some(history) = crate::history_select::sibling_additions(
+            repo_root,
+            seed,
+            config.page_history_commit_window,
+            None,
+        )
+    {
+        let mut ranked: Vec<(usize, usize)> = Vec::new(); // (tally, index)
+        for (index, member) in tower.members.iter().enumerate() {
+            if index < cap {
+                continue; // already inside the page window
+            }
+            if let Some(&count) = history.tally.get(&member.rel)
+                && history.meets_minimum(&member.rel)
+            {
+                ranked.push((count, index));
+            }
+        }
+        ranked.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
+        let promoted: Vec<usize> = ranked
+            .iter()
+            .take(config.page_task_relevance_reserved_slots)
+            .map(|(_, index)| *index)
+            .collect();
+        if verbose {
+            eprintln!(
+                "page task relevance: signal history ({} prior sibling-additions), {} candidates, {} promoted",
+                history.prior_commits,
+                ranked.len(),
+                promoted.len()
+            );
+            for &(count, index) in ranked
+                .iter()
+                .take(config.page_task_relevance_reserved_slots)
+            {
+                eprintln!(
+                    "  promoted: {count}/{}  {}",
+                    history.prior_commits, tower.members[index].rel
+                );
+            }
+        }
+        if !promoted.is_empty() {
+            return page_from_promoted(
+                tower,
+                cap,
+                &promoted,
+                "history",
+                Some(history.prior_commits),
+            );
+        }
+    }
+
+    // Fallback for repositories with no usable history: the qualifier probe.
+    let qualifier = crate::anchor::qualifier_tokens(task);
+    if qualifier.is_empty() {
+        return legacy();
+    }
+
+    let mut candidates: Vec<(usize, usize)> = Vec::new(); // (score, index)
+    let mut examined = 0usize;
+    let mut rejected = 0usize;
+    let mut scanned = 0usize;
+    for (index, member) in tower.members.iter().enumerate() {
+        if index < cap {
+            continue; // already inside the page window
+        }
+        // The bound caps the expensive work — files that survive the
+        // pre-filter and get scored — not the cheap reads, so a registry at
+        // rank 988 is still reachable on a large repo.
+        if scanned >= config.page_task_relevance_max_candidates {
+            break;
+        }
+        examined += 1;
+        let Ok(text) = fs::read_to_string(repo_root.join(&member.rel)) else {
+            continue;
+        };
+        // Plain substring pre-filter for any qualifier token, plus the cheap
+        // path check: a file with neither cannot score.
+        let lowered = text.to_ascii_lowercase();
+        let text_hit = qualifier
+            .iter()
+            .any(|token| lowered.contains(token.as_str()));
+        if !text_hit && !crate::anchor::path_is_local(&member.rel, &qualifier) {
+            rejected += 1;
+            continue;
+        }
+        scanned += 1;
+        let score = crate::anchor::selection_score(&text, &member.rel, &qualifier);
+        if score > 0 {
+            candidates.push((score, index));
+        }
+    }
+    // Rank by evidence strength, then tower order as the tie-break. The old
+    // first-come walk let whichever low-score file matched first take a slot.
+    candidates.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
+    let promoted: Vec<usize> = candidates
+        .iter()
+        .take(config.page_task_relevance_reserved_slots)
+        .map(|(_, index)| *index)
+        .collect();
+    if verbose {
+        eprintln!(
+            "page task relevance: signal qualifier fallback; examined {examined}, pre-filter rejected {rejected}, scanned {scanned}, promoted {}",
+            promoted.len()
+        );
+        for &(score, index) in candidates
+            .iter()
+            .take(config.page_task_relevance_reserved_slots)
+        {
+            eprintln!("  promoted: score {score}  {}", tower.members[index].rel);
+        }
+    }
+    if promoted.is_empty() {
+        return legacy();
+    }
+    page_from_promoted(tower, cap, &promoted, "qualifier", None)
+}
+
+/// The seed, then the reserved-slot files, then the existing tower order to
+/// the cap, skipping duplicates.
+fn page_from_promoted(
+    tower: &graphstore::TowerGraph,
+    cap: usize,
+    promoted: &[usize],
+    signal: &'static str,
+    prior_commits: Option<usize>,
+) -> PageSelection {
+    let promoted_set: BTreeSet<usize> = promoted.iter().copied().collect();
+    let mut indices: Vec<usize> = Vec::with_capacity(cap);
+    for (index, member) in tower.members.iter().enumerate() {
+        if member.tier == Tier::Zero && indices.len() < cap {
+            indices.push(index);
+        }
+    }
+    for &index in promoted {
+        if indices.len() < cap {
+            indices.push(index);
+        }
+    }
+    for index in 0..tower.members.len() {
+        if indices.len() >= cap {
+            break;
+        }
+        if promoted_set.contains(&index) || tower.members[index].tier == Tier::Zero {
+            continue;
+        }
+        indices.push(index);
+    }
+    PageSelection {
+        indices,
+        promoted: promoted_set,
+        signal,
+        prior_commits,
+    }
+}
+
 fn open(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
     let (root, seeds) = resolve_tower_seeds(args, config)?;
     // `resolve_tower_seeds` has just refreshed and persisted the project graph.
@@ -69,12 +273,32 @@ fn open(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
         closed_changes: Vec::new(),
     };
     let context = page::context_path(config, &manifest.repo_id, &page_id);
+    let entry_env = EntryEnv {
+        config,
+        task: manifest.task.as_deref(),
+        repo_root: &root,
+        allow_secrets: args.allow_secrets,
+        redact: args.redact,
+    };
     let serialized = if manifest.delivery == PageDelivery::Manifest {
-        for member in tower
-            .members
-            .iter()
-            .take(config.page_manifest_max_files.max(1))
-        {
+        let selection_started = std::time::Instant::now();
+        let selection = select_manifest_page(
+            &tower,
+            config,
+            manifest.task.as_deref(),
+            &root,
+            args.verbose || config.verbose_output,
+        );
+        if args.verbose || config.verbose_output {
+            eprintln!(
+                "page selection: {:?} ({} promoted, signal {})",
+                selection_started.elapsed(),
+                selection.promoted.len(),
+                selection.signal
+            );
+        }
+        for index in &selection.indices {
+            let member = &tower.members[*index];
             let file = project
                 .file(&member.rel)
                 .expect("tower member remains in project graph");
@@ -83,9 +307,13 @@ fn open(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
                 tier: member.tier,
                 base_sha: file.blake3.clone(),
                 added_via: PageAddReason::Opened,
+                task_relevant: selection.promoted.contains(index),
             });
         }
-        serialize_document(&[context_meta(&manifest, &tower, &project)], &[])?
+        serialize_document(
+            &[context_meta(&manifest, &tower, &project, Some(&entry_env))],
+            &[],
+        )?
     } else {
         let mut files = Vec::new();
         let mut states = Vec::new();
@@ -98,6 +326,7 @@ fn open(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
                     tier: member.tier,
                     base_sha: source.base_sha.clone().expect("page source has SHA"),
                     added_via: PageAddReason::Opened,
+                    task_relevant: false,
                 });
                 files.push(source);
             }
@@ -113,14 +342,16 @@ fn open(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
             }
             manifest.files.push(state);
             selected.push(source);
-            let meta = context_meta(&manifest, &tower, &project);
+            let meta = context_meta(&manifest, &tower, &project, None);
             if serialize_document(std::slice::from_ref(&meta), &selected)?.len() > budget {
                 manifest.files.pop();
                 selected.pop();
             }
         }
-        let serialized =
-            serialize_document(&[context_meta(&manifest, &tower, &project)], &selected)?;
+        let serialized = serialize_document(
+            &[context_meta(&manifest, &tower, &project, None)],
+            &selected,
+        )?;
         if serialized.len() > budget {
             let _ = fs::remove_dir(page::page_dir(config, &manifest.repo_id, &page_id));
             return Err(SlopError::PageByteBudgetExceeded {
@@ -245,18 +476,31 @@ fn add(args: &CliArgs, config: &Config) -> Result<(), SlopError> {
             tier,
             base_sha: source.base_sha.clone().expect("page source has SHA"),
             added_via: reason,
+            task_relevant: false,
         });
         if manifest.delivery == PageDelivery::Bundle {
             sources.push(source);
         }
     }
     let project = graphstore::refresh_project_graph(&root, config, false)?.0;
+    let entry_env = if manifest.delivery == PageDelivery::Manifest {
+        Some(EntryEnv {
+            config,
+            task: manifest.task.as_deref(),
+            repo_root: &root,
+            allow_secrets: args.allow_secrets,
+            redact: args.redact,
+        })
+    } else {
+        None
+    };
     document
         .meta_blocks
         .retain(|meta| meta.kind != "context-page");
-    document
-        .meta_blocks
-        .insert(0, context_meta(&manifest, &tower, &project));
+    document.meta_blocks.insert(
+        0,
+        context_meta(&manifest, &tower, &project, entry_env.as_ref()),
+    );
     let serialized = if manifest.delivery == PageDelivery::Manifest {
         serialize_document(&document.meta_blocks, &[])?
     } else {
@@ -554,6 +798,7 @@ fn context_meta(
     manifest: &PageManifest,
     tower: &graphstore::TowerGraph,
     project: &graphstore::ProjectGraph,
+    entry_env: Option<&EntryEnv<'_>>,
 ) -> SoupMetaBlock {
     if manifest.delivery == PageDelivery::Manifest {
         let mut lines = vec![
@@ -570,8 +815,16 @@ fn context_meta(
             "#".to_string(),
             "# RANKED FILES (page scope):".to_string(),
         ];
+        if manifest.files.iter().any(|file| file.task_relevant) {
+            lines.push(
+                "# * = admitted by task relevance (reserved slots), not score order.".to_string(),
+            );
+        }
         for state in &manifest.files {
             lines.push(manifest_entry_line(state, tower, project));
+            if let Some(env) = entry_env {
+                lines.extend(manifest_entry_points(state, env));
+            }
         }
         let omitted = tower.members.len().saturating_sub(manifest.files.len());
         lines.push("#".to_string());
@@ -658,7 +911,7 @@ fn context_meta(
     {
         lines.push(format!("#   {}", member.rel));
     }
-    lines.extend(["#".to_string(), "# To pull a tier-2/3 file into full text, emit: #SLOP_REQUEST \"<absolute path>\" <reason>".to_string()]);
+    lines.extend(["#".to_string(), "# To pull a tier-2/3 file into full text, emit: slop -r \"<absolute path>\" -s".to_string()]);
     SoupMetaBlock {
         label: "context-page".to_string(),
         kind: "context-page".to_string(),
@@ -667,6 +920,126 @@ fn context_meta(
         readonly: true,
         content_lines: lines,
     }
+}
+
+/// Values the entry-anchor renderer needs from the CLI/config at render time.
+struct EntryEnv<'a> {
+    config: &'a Config,
+    task: Option<&'a str>,
+    repo_root: &'a Path,
+    allow_secrets: bool,
+    redact: bool,
+}
+
+/// Resolve `entry:` lines for one manifest file, as many as the configured
+/// per-file cap. None of the existing first-line anchor semantics change.
+fn manifest_entry_points(state: &PageFileState, env: &EntryEnv) -> Vec<String> {
+    let Some(task) = env.task else {
+        return Vec::new();
+    };
+    if !env.config.page_manifest_entry_anchors {
+        return Vec::new();
+    }
+    let path = env.repo_root.join(&state.rel);
+    let Ok(text) = fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let scanned = crate::anchor::scan_identifiers(&text);
+    let points = crate::anchor::entry_points(
+        &scanned,
+        task,
+        env.config.page_manifest_max_entry_points_per_file,
+        env.config.anchor_affinity_min_shared_tokens,
+        env.config.anchor_sorted_block_min_entries,
+        env.config.anchor_sorted_block_max_line_gap,
+    );
+    points
+        .into_iter()
+        .map(|point| {
+            let preview = entry_preview(&state.rel, &text, point.line, env);
+            match point.insertion {
+                Some(ins) => format!(
+                    "#     entry: L{line}  {preview}   [insert after L{line}, before L{}; block L{}-L{}]",
+                    ins.before_line,
+                    ins.span_lo,
+                    ins.span_hi,
+                    line = point.line,
+                    preview = preview,
+                ),
+                None => format!(
+                    "#     entry: L{line}  {preview}",
+                    line = point.line,
+                    preview = preview
+                ),
+            }
+        })
+        .collect()
+}
+
+/// The raw preview of one file line, truncated to the configured width and
+/// routed through the same secrets enforcement as the bundle path. A finding
+/// suppresses the text but keeps the line number; `--allow-secrets` and
+/// `--redact` behave exactly as they do for the bundle path.
+fn entry_preview(rel: &str, text: &str, line: usize, env: &EntryEnv) -> String {
+    let raw = text
+        .lines()
+        .nth(line.saturating_sub(1))
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let raw = if raw.chars().count() > env.config.page_manifest_entry_preview_chars {
+        let mut truncated: String = raw
+            .chars()
+            .take(env.config.page_manifest_entry_preview_chars)
+            .collect();
+        truncated.push('…');
+        truncated
+    } else {
+        raw
+    };
+    let source = crate::models::SourceFile {
+        original_absolute_path: PathBuf::from(rel),
+        file_name: rel.to_string(),
+        name_token: rel.to_string(),
+        contents: raw.trim_end().to_string(),
+        logical_line_count: 1,
+        trailing_newline: false,
+        base_sha: None,
+        read_only: false,
+    };
+    let files = [source];
+    let on_mode = {
+        let mode = env.config.secret_scan.trim().to_lowercase();
+        !matches!(mode.as_str(), "off" | "disabled" | "false" | "none")
+    };
+    if !on_mode {
+        return files[0].contents.clone();
+    }
+    let findings = crate::secrets::scan_files(&files);
+    for finding in &findings {
+        eprintln!(
+            "warning: entry preview skipped a secrets finding: {rel}:{} {}",
+            finding.line, finding.rule
+        );
+    }
+    if findings.is_empty() {
+        return files[0].contents.clone();
+    }
+    if env.allow_secrets {
+        return files[0].contents.clone();
+    }
+    if env.redact {
+        let mut files_mut = files.to_vec();
+        crate::secrets::apply_redaction(&mut files_mut, &findings);
+        return files_mut[0].contents.trim_end().to_string();
+    }
+    format!(
+        "(suppressed: {} secrets finding)",
+        findings
+            .first()
+            .map(|f| f.rule.as_str())
+            .unwrap_or("possible")
+    )
 }
 
 fn manifest_entry_line(
@@ -732,13 +1105,14 @@ fn manifest_entry_line(
             .collect::<Vec<_>>()
             .join(", ")
     };
+    let tier = if state.task_relevant {
+        format!("{}*", tier_label(state.tier))
+    } else {
+        tier_label(state.tier).to_string()
+    };
     format!(
         "#   {}   {}   via: {}   shares: {}   anchor: {}",
-        state.rel,
-        tier_label(state.tier),
-        via,
-        shares,
-        anchors
+        state.rel, tier, via, shares, anchors
     )
 }
 
@@ -837,6 +1211,7 @@ mod tests {
                 tier: Tier::Zero,
                 base_sha: "0".repeat(64),
                 added_via: PageAddReason::Opened,
+                task_relevant: false,
             }],
             closed_changes: Vec::new(),
         }
@@ -889,7 +1264,7 @@ mod tests {
             structure: Default::default(),
             stats: Default::default(),
         };
-        let meta = context_meta(&manifest(), &tower, &project);
+        let meta = context_meta(&manifest(), &tower, &project, None);
         assert!(meta.readonly);
         assert!(meta.content_lines.iter().any(|line| line.contains("b.rs")));
         assert!(meta.content_lines.iter().any(|line| line.contains("c.rs")));
@@ -904,6 +1279,7 @@ mod tests {
             tier: Tier::One,
             base_sha: "1".repeat(64),
             added_via: PageAddReason::Opened,
+            task_relevant: false,
         });
         let tower = TowerGraph {
             schema: 2,
@@ -972,7 +1348,7 @@ mod tests {
             structure: Structure::default(),
             stats: GraphStats::default(),
         };
-        let rendered = context_meta(&manifest, &tower, &project)
+        let rendered = context_meta(&manifest, &tower, &project, None)
             .content_lines
             .join("\n");
         assert!(rendered.contains("via: a.rs"), "{rendered}");
@@ -985,5 +1361,451 @@ mod tests {
         assert_eq!(parse_duration("7d").expect("days"), 604_800);
         assert_eq!(parse_duration("30m").expect("minutes"), 1_800);
         assert!(parse_duration("forever").is_err());
+    }
+
+    fn write_rel_file(root: &Path, rel: &str, contents: &str) {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        fs::write(path, contents).expect("write fixture");
+    }
+
+    fn env_for<'a>(config: &'a Config, task: Option<&'a str>, root: &'a Path) -> EntryEnv<'a> {
+        EntryEnv {
+            config,
+            task,
+            repo_root: root,
+            allow_secrets: false,
+            redact: false,
+        }
+    }
+
+    #[test]
+    fn unsorted_logic_file_yields_no_entry_lines_and_keeps_reference_anchor() {
+        let config = Config::default();
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_rel_file(
+            dir.path(),
+            "logic.rs",
+            "def parse_config (): 1
+render_page_now ()
+compute_hash ()
+def validate_input(): 1
+",
+        );
+        let mut manifest = manifest();
+        manifest.delivery = PageDelivery::Manifest;
+        manifest.task = Some("implement render-blue-fixture".to_string());
+        let tower = TowerGraph {
+            schema: 2,
+            repo_id: "repo".to_string(),
+            seed_digest: "digest".to_string(),
+            seeds: vec!["a.rs".to_string()],
+            project_graph_fingerprint: "fingerprint".to_string(),
+            ranking_fingerprint: "ranking".to_string(),
+            generated_at_unix: 0,
+            members: vec![TowerMember {
+                rel: "a.rs".to_string(),
+                tier: Tier::Zero,
+                score: 1.0,
+                via: Vec::new(),
+            }],
+            cut_scores: [0.0; 3],
+        };
+        let file = |rel: &str, tags| FileEntry {
+            rel: rel.to_string(),
+            blake3: "0".repeat(64),
+            size: 1,
+            parsed: true,
+            tags,
+            rank: 0.0,
+            afferent: 0,
+            efferent: 0,
+            instability: 1.0,
+            def_count: 0,
+            community: None,
+        };
+        let project = crate::graphstore::ProjectGraph {
+            schema: 3,
+            repo_root: "/repo".to_string(),
+            repo_id: "repo".to_string(),
+            generated_at_unix: 0,
+            generator_version: "test".to_string(),
+            files: vec![
+                file(
+                    "a.rs",
+                    vec![StoredTag {
+                        name: "shared".to_string(),
+                        line: 2,
+                        def: false,
+                    }],
+                ),
+                file("logic.rs", vec![]),
+            ],
+            symbol_edges: vec![SymbolEdge {
+                from: "a.rs".to_string(),
+                to: "logic.rs".to_string(),
+                weight: 1.0,
+                idents: vec!["shared".to_string()],
+            }],
+            cochange_edges: vec![],
+            communities: vec![],
+            community_couplings: vec![],
+            directory_couplings: vec![],
+            structure: Structure::default(),
+            stats: GraphStats::default(),
+        };
+        let env = env_for(&config, manifest.task.as_deref(), dir.path());
+        manifest.files.push(PageFileState {
+            rel: "logic.rs".to_string(),
+            tier: Tier::One,
+            base_sha: "1".repeat(64),
+            added_via: PageAddReason::Opened,
+            task_relevant: false,
+        });
+        let rendered = context_meta(&manifest, &tower, &project, Some(&env))
+            .content_lines
+            .join("\n");
+        assert!(!rendered.contains("entry:"), "{rendered}");
+        assert!(rendered.contains("logic.rs"), "{rendered}");
+        assert!(rendered.contains("anchor:"), "{rendered}");
+    }
+
+    #[test]
+    fn no_task_yields_byte_identical_manifest_output() {
+        let config = Config::default();
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_rel_file(dir.path(), "a.rs", "pub fn shared() {}\n");
+        let mut manifest = manifest();
+        manifest.delivery = PageDelivery::Manifest;
+        let tower = TowerGraph {
+            schema: 2,
+            repo_id: "repo".to_string(),
+            seed_digest: "digest".to_string(),
+            seeds: vec!["a.rs".to_string()],
+            project_graph_fingerprint: "fingerprint".to_string(),
+            ranking_fingerprint: "ranking".to_string(),
+            generated_at_unix: 0,
+            members: vec![TowerMember {
+                rel: "a.rs".to_string(),
+                tier: Tier::Zero,
+                score: 1.0,
+                via: Vec::new(),
+            }],
+            cut_scores: [0.0; 3],
+        };
+        let project = crate::graphstore::ProjectGraph {
+            schema: 3,
+            repo_root: "/repo".to_string(),
+            repo_id: "repo".to_string(),
+            generated_at_unix: 0,
+            generator_version: "test".to_string(),
+            files: Vec::new(),
+            symbol_edges: Vec::new(),
+            cochange_edges: Vec::new(),
+            communities: Vec::new(),
+            community_couplings: Vec::new(),
+            directory_couplings: Vec::new(),
+            structure: Structure::default(),
+            stats: GraphStats::default(),
+        };
+        let without_env = context_meta(&manifest, &tower, &project, None);
+        let env = env_for(&config, None, dir.path());
+        let with_env = context_meta(&manifest, &tower, &project, Some(&env));
+        assert_eq!(
+            without_env.content_lines, with_env.content_lines,
+            "task-less pages must render byte-identically with and without the anchor env"
+        );
+    }
+
+    #[test]
+    fn secret_in_preview_suppresses_text_but_keeps_line_number() {
+        let config = Config::default();
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_rel_file(
+            dir.path(),
+            "reg.rs",
+            "alpha_secret_audit = \"AKIA1234567890123456\"\ngamma_plain_utility = 1\n",
+        );
+        let env = env_for(&config, Some("alpha-secret-audit"), dir.path());
+        let state = PageFileState {
+            rel: "reg.rs".to_string(),
+            tier: Tier::One,
+            base_sha: "2".repeat(64),
+            added_via: PageAddReason::Opened,
+            task_relevant: false,
+        };
+        let lines = manifest_entry_points(&state, &env);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("entry: L1"), "{lines:?}");
+        assert!(lines[0].contains("suppressed"), "{lines:?}");
+        assert!(!lines[0].contains("AKIA1234567890123456"), "{lines:?}");
+    }
+
+    #[test]
+    fn allow_secrets_shows_preview_despite_finding() {
+        let config = Config::default();
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_rel_file(
+            dir.path(),
+            "reg.rs",
+            "alpha_secret_audit = \"AKIA1234567890123456\"\ngamma_plain_utility = 1\n",
+        );
+        let mut env = env_for(&config, Some("alpha-secret-audit"), dir.path());
+        env.allow_secrets = true;
+        let state = PageFileState {
+            rel: "reg.rs".to_string(),
+            tier: Tier::One,
+            base_sha: "3".repeat(64),
+            added_via: PageAddReason::Opened,
+            task_relevant: false,
+        };
+        let lines = manifest_entry_points(&state, &env);
+        assert!(lines[0].contains("AKIA1234567890123456"), "{lines:?}");
+    }
+
+    fn selection_tower() -> TowerGraph {
+        let member = |rel: &str, tier, score| TowerMember {
+            rel: rel.to_string(),
+            tier,
+            score,
+            via: Vec::new(),
+        };
+        TowerGraph {
+            schema: 2,
+            repo_id: "repo".to_string(),
+            seed_digest: "digest".to_string(),
+            seeds: vec!["a.rs".to_string()],
+            project_graph_fingerprint: "fingerprint".to_string(),
+            ranking_fingerprint: "ranking".to_string(),
+            generated_at_unix: 0,
+            members: vec![
+                member("a.rs", Tier::Zero, 1.0),
+                member("b.rs", Tier::One, 0.5),
+                member("c.rs", Tier::Three, 0.01),
+                member("d.rs", Tier::Three, 0.005),
+            ],
+            cut_scores: [0.0; 3],
+        }
+    }
+
+    #[test]
+    fn task_relevance_promotion_reserves_a_slot_for_a_qualifier_file() {
+        let config = Config {
+            page_manifest_max_files: 2,
+            page_task_relevance_reserved_slots: 1,
+            ..Config::default()
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_rel_file(dir.path(), "c.rs", "use flake8_pyi::rules;\n");
+        let selection = select_manifest_page(
+            &selection_tower(),
+            &config,
+            Some("[`flake8-pyi`] Implement `redundant-none-literal` (`PYI061`)"),
+            dir.path(),
+            false,
+        );
+        assert_eq!(selection.indices, vec![0, 2], "seed then promoted");
+        assert!(selection.promoted.contains(&2));
+    }
+
+    #[test]
+    fn higher_selection_score_beats_earlier_tower_order() {
+        let config = Config {
+            page_manifest_max_files: 2,
+            page_task_relevance_reserved_slots: 1,
+            ..Config::default()
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_rel_file(dir.path(), "c.rs", "use flake8_pyi::rules;\n");
+        write_rel_file(
+            dir.path(),
+            "d.rs",
+            "use flake8_pyi;\nuse flake8_pyi;\nuse flake8_pyi;\n",
+        );
+        let selection = select_manifest_page(
+            &selection_tower(),
+            &config,
+            Some("[`flake8-pyi`] Implement `redundant-none-literal` (`PYI061`)"),
+            dir.path(),
+            false,
+        );
+        assert_eq!(
+            selection.indices,
+            vec![0, 3],
+            "the higher-scoring d.rs must win the one slot despite ranking later"
+        );
+        assert!(selection.promoted.contains(&3));
+    }
+
+    #[test]
+    fn registry_hint_scores_a_plugin_mod_rs_from_its_path() {
+        let config = Config {
+            page_manifest_max_files: 2,
+            page_task_relevance_reserved_slots: 1,
+            ..Config::default()
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_rel_file(
+            dir.path(),
+            "flake8_pyi/rules/mod.rs",
+            "mod alpha;\nmod beta;\n",
+        );
+        let tower = {
+            let mut tower = selection_tower();
+            tower.members[2].rel = "flake8_pyi/rules/mod.rs".to_string();
+            tower
+        };
+        let selection = select_manifest_page(
+            &tower,
+            &config,
+            Some("[`flake8-pyi`] Implement `redundant-none-literal` (`PYI061`)"),
+            dir.path(),
+            false,
+        );
+        assert!(
+            selection.promoted.contains(&2),
+            "a plugin mod.rs scores via its path even with no content match: {selection:?}"
+        );
+    }
+
+    #[test]
+    fn task_relevance_flag_off_matches_legacy_selection() {
+        let config = Config {
+            page_manifest_max_files: 2,
+            page_task_relevance_promotion: false,
+            ..Config::default()
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_rel_file(dir.path(), "c.rs", "use flake8_pyi::rules;\n");
+        let selection = select_manifest_page(
+            &selection_tower(),
+            &config,
+            Some("[`flake8-pyi`] Implement `redundant-none-literal` (`PYI061`)"),
+            dir.path(),
+            false,
+        );
+        assert_eq!(selection.indices, vec![0, 1]);
+        assert!(selection.promoted.is_empty());
+    }
+
+    #[test]
+    fn no_task_matches_legacy_selection() {
+        let config = Config {
+            page_manifest_max_files: 2,
+            ..Config::default()
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let selection = select_manifest_page(&selection_tower(), &config, None, dir.path(), false);
+        assert_eq!(selection.indices, vec![0, 1]);
+        assert!(selection.promoted.is_empty());
+    }
+
+    fn page_test_git(root: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args([
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=test",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git {args:?}");
+    }
+
+    fn page_test_commit(root: &Path, message: &str) {
+        page_test_git(root, &["add", "-A"]);
+        page_test_git(root, &["commit", "-m", message]);
+    }
+
+    #[test]
+    fn history_selection_promotes_files_prior_additions_touched() {
+        let config = Config {
+            page_manifest_max_files: 2,
+            page_task_relevance_reserved_slots: 1,
+            ..Config::default()
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        page_test_git(dir.path(), &["init", "-q"]);
+        write_rel_file(dir.path(), "a.rs", "seed\n");
+        write_rel_file(dir.path(), "c.rs", "v1\n");
+        page_test_commit(dir.path(), "add seed");
+        write_rel_file(dir.path(), "sibling_b.rs", "b\n");
+        write_rel_file(dir.path(), "c.rs", "v2\n");
+        page_test_commit(dir.path(), "add sibling b");
+        write_rel_file(dir.path(), "sibling_c.rs", "c\n");
+        write_rel_file(dir.path(), "c.rs", "v3\n");
+        page_test_commit(dir.path(), "add sibling c");
+
+        let selection = select_manifest_page(
+            &selection_tower(),
+            &config,
+            Some("[`flake8-pyi`] Implement `redundant-none-literal` (`PYI061`)"),
+            dir.path(),
+            false,
+        );
+        assert_eq!(
+            selection.indices,
+            vec![0, 2],
+            "c.rs was touched by 2 of 3 prior sibling additions and must win the slot"
+        );
+        assert!(selection.promoted.contains(&2));
+    }
+
+    #[test]
+    fn task_relevant_manifest_line_is_marked_with_a_star_and_legend() {
+        let mut manifest = manifest();
+        manifest.delivery = PageDelivery::Manifest;
+        manifest.files = vec![PageFileState {
+            rel: "c.rs".to_string(),
+            tier: Tier::Three,
+            base_sha: "3".repeat(64),
+            added_via: PageAddReason::Opened,
+            task_relevant: true,
+        }];
+        let tower = TowerGraph {
+            schema: 2,
+            repo_id: "repo".to_string(),
+            seed_digest: "digest".to_string(),
+            seeds: vec!["c.rs".to_string()],
+            project_graph_fingerprint: "fingerprint".to_string(),
+            ranking_fingerprint: "ranking".to_string(),
+            generated_at_unix: 0,
+            members: vec![TowerMember {
+                rel: "c.rs".to_string(),
+                tier: Tier::Zero,
+                score: 1.0,
+                via: Vec::new(),
+            }],
+            cut_scores: [0.0; 3],
+        };
+        let project = crate::graphstore::ProjectGraph {
+            schema: 3,
+            repo_root: "/repo".to_string(),
+            repo_id: "repo".to_string(),
+            generated_at_unix: 0,
+            generator_version: "test".to_string(),
+            files: Vec::new(),
+            symbol_edges: Vec::new(),
+            cochange_edges: Vec::new(),
+            communities: Vec::new(),
+            community_couplings: Vec::new(),
+            directory_couplings: Vec::new(),
+            structure: Structure::default(),
+            stats: GraphStats::default(),
+        };
+        let rendered = context_meta(&manifest, &tower, &project, None)
+            .content_lines
+            .join("\n");
+        assert!(rendered.contains("tier-3*"), "{rendered}");
+        assert!(
+            rendered.contains("admitted by task relevance"),
+            "{rendered}"
+        );
     }
 }

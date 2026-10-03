@@ -2,7 +2,7 @@
 
 You will receive a "slop" file — a markdown file bundling multiple source files. Parse it, perform the requested work, and return results in slop format so the user can restore files locally.
 
-**For the person/tool running slop:** `#SLOP_REQUEST "<path>" <reason>` is agent output, not a slop directive. A host loop may regex-extract its quoted path and pass that path directly to `slop --page-add <path> --page <page-id>`; no transformation is needed.
+**For the person/tool running slop:** When an agent needs files, it replies with a full command like `slop -r <file1> <file2> <recursive-dir1> -s`; run it to slopify those paths.
 
 ## Overview
 
@@ -141,13 +141,13 @@ tres
 
 ## Requesting Files
 
-The repo-map meta block may reference files NOT present as editable #SLOP blocks. Those are context only. If you need the full contents of such a file to complete the task, do NOT infer or hallucinate them — request the file by emitting a line in your text response:
+The repo-map meta block may reference files NOT present as editable #SLOP blocks. Those are context only. If you need the full contents of such a file to complete the task, do NOT infer or hallucinate them — request it by emitting a full slop command in your text response:
 
 ```
-#SLOP_REQUEST "<absolute_path>" <short reason>
+slop -r "<file1>" "<file2>" "<recursive-dir1>" -s
 ```
 
-The user can then re-slop with that file included (e.g. `slop --seed <path> ...`).
+The user runs that command to slopify exactly what you asked for.
 
 ## Local context paging
 
@@ -156,7 +156,7 @@ Before starting a large task, ask the human/tool running slop to run `slop <repo
 When you receive a `context-page` meta block, treat its tier-0/1 files as your complete editable working set. A local tool-using agent edits those real page files directly; `context.slop.md` is its read-only context, not a write-back channel. Its tier-2/3 listings are an index of nearby files, not unavailable files: request one when needed with the ordinary convention:
 
 ```
-#SLOP_REQUEST "<absolute_path>" <short reason>
+slop -r "<absolute_path>" -s
 ```
 
 Never fabricate tier-2/3 content from an outline entry; the outline is a pointer, not a substitute for source. Bundle-only agents return an ordinary reslopped document, and their host writes it to the selected page's `returned/` directory before running `--page-close`. Local tool-using agents run `--page-close` after directly editing page files so Slop records the changes and refreshes the graph. If no returned document or direct edit exists, `--page-close` refuses to close unless `--allow-empty` explicitly abandons the page. `--max-slop-bytes` limits full-text page content by demoting tier-1 files to outlines while retaining tier 0; page opening fails if required tier-0 content and metadata alone cannot fit. A graph cannot rank a file that does not exist yet: add an intentional new file with `--page-add --create <path>`, then edit the real file directly. If an existing file is absent even from tier 3, ask for a project-graph rebuild with `--reindex`, or request that specific file by path when its location is known.

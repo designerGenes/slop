@@ -73,7 +73,7 @@ expensive step; it is the only step we skip.
   atomically via temp-and-rename. Cache, not state — safe to delete, and it
   sits beside the selection index for that reason.
 - Readable: `<slopified>/<repo-id>.project-graph.md`, same dialect as the `-g`
-  block, including the `#SLOP_REQUEST` convention. Disable with
+  block, including the file-request command. Disable with
   `graph_emit_artifact: false`.
 - `<repo-id>` is `<dirname>-<blake3(canonical path)[..16]>`, so two checkouts
   named `api` never collide.
@@ -164,8 +164,8 @@ work, and losing it costs something.
 **Amending in flight** is the part that has to work. An agent that discovers it
 needs `src/secrets.rs` two thirds of the way through a task must be able to
 promote it into the page without rebuilding anything — the tower graph already
-scored it, so promotion is a tier change plus an append, and `#SLOP_REQUEST`
-is already the channel for asking.
+scored it, so promotion is a tier change plus an append, and a requested
+`slop -r` command is already the channel for asking.
 
 **On close:** deslop `returned/` into the real files, honouring `SLOP_BASE_SHA`
 drift detection exactly as today. Also compare the real page files against their
@@ -187,7 +187,7 @@ The machinery is useless if the agent does not know to reach for it.
 - A `#SLOP_META "context-page"` block at the head of `context.slop.md` stating
   the task, the tier of every file, and what sits just outside the page — so
   the agent can see the edge of its own context and knows what it may request.
-- Make `#SLOP_REQUEST` promote rather than re-bundle.
+- Make a requested `slop -r` command promote rather than re-bundle.
 
 ---
 

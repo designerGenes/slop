@@ -239,7 +239,7 @@ fn the_artifact_describes_the_modules_it_found() {
     assert!(text.contains("# PROJECT GRAPH"), "{text}");
     assert!(text.contains("## MODULES"), "{text}");
     assert!(text.contains("## METRICS"), "{text}");
-    assert!(text.contains("#SLOP_REQUEST"), "{text}");
+    assert!(text.contains("slop -r"), "{text}");
     assert!(text.contains("auth"), "{text}");
     assert!(text.contains("billing"), "{text}");
 }

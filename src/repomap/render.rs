@@ -19,7 +19,7 @@ pub const LEGEND: &str = "\
 #   risk = change blast radius, bucketed from Ca.
 # Files marked @ are already included in full below; the SYMBOLS section skips
 # them deliberately and spends its budget on files you cannot otherwise see.
-# Request any file with:  #SLOP_REQUEST \"<absolute path>\" <reason>";
+# Request any file with:  slop -r \"<absolute path>\" -s";
 
 pub fn render_manifest(manifest: &Manifest, in_bundle: &BTreeSet<String>) -> String {
     let source = if manifest.from_git {

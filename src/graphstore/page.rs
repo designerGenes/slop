@@ -49,6 +49,10 @@ pub struct PageFileState {
     pub tier: Tier,
     pub base_sha: String,
     pub added_via: PageAddReason,
+    /// Admitted by task-relevance reserved slots rather than score order.
+    /// Old page manifests predate the field and load as `false`.
+    #[serde(default)]
+    pub task_relevant: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

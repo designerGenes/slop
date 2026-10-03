@@ -2,7 +2,7 @@
 //!
 //! The JSON in the cache is the source of truth; this is the view. It is
 //! deliberately the same dialect as the `-g` repomap block — same column
-//! vocabulary, same `#SLOP_REQUEST` convention — so an agent that has learned
+//! vocabulary, same file-request convention — so an agent that has learned
 //! to read one can read the other without new instructions.
 
 use std::collections::BTreeMap;
@@ -95,7 +95,7 @@ fn render_header(graph: &ProjectGraph, report: Option<&BuildReport>) -> String {
     out.push_str("# I  = Ce/(Ca+Ce). Near 0 = heavily depended upon, changes are risky.\n");
     out.push_str("# Modules come from the edges, not the directory tree; when the two\n");
     out.push_str("# disagree, the edges are describing how the code actually behaves.\n");
-    out.push_str("# Request any file with:  #SLOP_REQUEST \"<absolute path>\" <reason>\n");
+    out.push_str("# Request any file with:  slop -r \"<absolute path>\" -s\n");
     out
 }
 
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn keeps_the_request_convention_the_repomap_taught() {
-        assert!(render(&graph(), None).contains("#SLOP_REQUEST"));
+        assert!(render(&graph(), None).contains("slop -r"));
     }
 
     #[test]
